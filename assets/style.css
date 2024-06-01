@@ -1,0 +1,129 @@
+/* Style for the sidebar */
+.sidebar {
+    background-color: #002147;  /* Dark navy blue */
+    color: #002147;
+    min-height: 100vh;  /* Full height */
+    padding: 0px;
+}
+
+/* NavLink adjustments for full rectangle highlight */
+.sidebar .nav-link {
+    color: white;
+    padding: 12px 20px;  /* Adjust padding to increase the clickable area */
+    display: block;  /* Ensure links are block elements to fill the area */
+    margin: 5px;  /* Remove any default margin */
+    text-decoration: none;  /* Optional: removes underline from links */
+    transition: background-color 0.3s ease;  /* Smooth transition for background color */
+}
+
+/* Active NavLink styling */
+.sidebar .nav-link.active, .sidebar .nav-link:hover {
+    background-color: #f8f9fa;  /* Dark grey for active NavLink */
+    color: #002147;
+}
+/* Style for the main content area */
+.main-content {
+    background-color: #f8f8fc; 
+    padding: 5px;
+    margin-top: 2px;
+    border: 2px solid #002147;  /* Dark navy blue */
+}
+
+.prettier-button {
+    background-color: white; /* White background on hover */
+    color: #002147; /* Dark blue text on hover */
+    border: 2px solid #002147;  /* Dark navy blue */
+    font-size: 16px;
+    padding: 8px 16px;
+    margin-top: 10px;
+}
+
+.prettier-button:hover {
+    background-color: #002147;
+    color: white;
+    border: 2px solid white;  /* Dark navy blue */
+}
+
+.prettier-button:active {
+    background-color: #5b3c88; /* Deep purple background when clicked */
+    color: white; /* Keep text white when active */
+    border: 2px solid #002147;  /* Dark navy blue */
+}
+
+.label-container {
+    margin-bottom: 5px;
+    display: block;
+}
+
+.label-container label {
+    display: block;
+    font-weight: bold;
+}
+
+.border-top {
+    border-top: 5px #002147;
+    margin-top: 5px;
+    position: relative;
+    z-index: 100;  /* Ensure it's above other content if necessary */
+}
+
+.border-bottom {
+    border-bottom: 5px #002147;
+    margin-bottom: 5px;
+    position: relative;
+    z-index: 100;  /* Ensure it's above other content if necessary */
+}
+
+.content-section {
+    padding: 5px;
+}
+
+.chart-visuals {
+    border: 1px solid #002147;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    margin-left: 5px;
+    margin-right: 5px;
+}
+
+
+/* Style the control box and selected values */
+.Select--multi .Select-value {
+    background-color: #002147; /* Navy blue */
+    color: white; /* White text */
+}
+
+/* Style the text of selected values */
+.Select--multi .Select-value-label {
+    color: white;
+}
+
+/* Style for focused and selected options in the dropdown list */
+.Select-option.is-focused, .Select-option.is-selected {
+    background-color: #004a70; /* A slightly lighter navy blue */
+    color: white;
+}
+
+/* Adjust the color for other options */
+.Select-option {
+    color: white;
+}
+
+
+.dash-spinner
+{
+    border-top-color: #002147 !important;  /* Dark navy blue */
+    border-right-color: #002147 !important;  /* Dark navy blue */
+    border-bottom-color: #002147 !important;  /* Dark navy blue */
+    border-left-color: #002147 !important;  /* Dark navy blue */
+    color: #002147 !important; /* This sets the SVG color, which might not always apply depending on the spinner type */
+}
+
+/* Specific styles for default loader */
+.loading-bar {
+    border-top-color: #002147 !important;
+    border-right-color: #002147 !important;
+    border-bottom-color: #002147 !important;
+    border-left-color: #002147 !important; /* Navy blue for the spinning part */
+    color: #002147 !important;
+}

@@ -1,0 +1,7 @@
+express
+plotly
+dash
+pandas
+dash-ag-grid
+databricks-sql-connector
+dash-canvas
