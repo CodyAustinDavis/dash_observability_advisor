@@ -62,10 +62,17 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_
 
 
 ## Load Base Query Template Parts
-TAG_QUERY_1 = read_sql_file("./config/tag_query_1.sql") ## Where you add selected tags
-TAG_QUERY_2 = read_sql_file("./config/tag_query_2.sql")
-TAG_QUERY_3 = read_sql_file("./config/tag_query_3.sql") ## Where you filter the rest of the paramters
-TAG_QUERY_4 = read_sql_file("./config/tag_query_4.sql") ## Where you filter the rest of the paramters
+TAG_QUERY_1 = read_sql_file("./config/tagging_advisor/base_tag_query_1.sql") ## Where you add selected tags
+TAG_QUERY_2 = read_sql_file("./config/tagging_advisor/base_tag_query_2.sql")
+TAG_QUERY_3 = read_sql_file("./config/tagging_advisor/base_tag_query_3.sql") ## Where you filter the rest of the paramters
+TAG_QUERY_4 = read_sql_file("./config/tagging_advisor/base_tag_query_4.sql") ## Where you select the final data frame
+
+## Load Visual Specific Query Parts
+AGG_QUERY = read_sql_file("./config/tagging_advisor/tag_date_agg_query.sql")
+MATCHED_IND_QUERY = read_sql_file("./config/tagging_advisor/matched_indicator_query.sql")
+TAG_VALUES_QUERY = read_sql_file("./config/tagging_advisor/tag_values_query.sql")
+HEATMAP_QUERY = read_sql_file("./config/tagging_advisor/tag_sku_heatmap_query.sql")
+
 
 
 ##### Load Dynamic SQL Files
@@ -211,70 +218,16 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
         'Not Matched To Tag Policy': '#002147'
     }
 
-    AGG_QUERY = """
-                SELECT usage_date AS Usage_Date, 
-                SUM(usage_quantity) AS Usage_Quantity,
-                IsTaggingMatch AS `Tag Match`
-                FROM filtered_result
-                GROUP BY usage_date, IsTaggingMatch
-                """
-
-    MATCHED_IND_QUERY = """
-                        SELECT 
-                        SUM(CASE WHEN IsTaggingMatch = 'In Policy' THEN usage_quantity ELSE 0 END) AS `Matched Usage Quantity`,
-                        SUM(CASE WHEN IsTaggingMatch = 'Not Matched To Tag Policy' THEN usage_quantity ELSE 0 END) AS `Not Matched Usage Quantity`
-                        FROM filtered_result
-                        """
-    
-
-    TAG_VALUES_QUERY = """
-                 , exploded_tags AS 
-                    (SELECT
-                    explode(TagCombos) AS PolicyTagValue,
-                    usage_quantity AS Usage_Quantity
-                    FROM 
-                    filtered_result
-                    )
-
-                    SELECT CASE WHEN len(PolicyTagValue) = 0 
-                            THEN 'Not In Policy' ELSE PolicyTagValue END 
-                            AS `Tag Value In Policy`,
-                     SUM(Usage_Quantity) AS `Usage Quantity`
-                    FROM exploded_tags
-                    GROUP BY CASE WHEN len(PolicyTagValue) = 0 THEN 'Not In Policy' ELSE PolicyTagValue END 
-                    ORDER BY `Usage Quantity` DESC
-                """
-    
-    HEATMAP_QUERY = """ 
-                    , exploded_tags AS (
-                    SELECT
-                        explode(TagCombos) AS PolicyTagValue,
-                        usage_quantity AS Usage_Quantity,
-                        billing_origin_product AS Product
-                    FROM
-                        filtered_result
-                    )
-
-                    SELECT 
-                    PolicyTagValue AS Tag,
-                    Product AS Product,
-                    SUM(usage_quantity) AS `Usage Quantity`
-                    FROM exploded_tags
-                    GROUP BY  PolicyTagValue,
-                    Product
-                """
-    
-
     # Convert the result to a DataFrame
     query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=AGG_QUERY)
     # Convert the result to a DataFrame
     df = system_query_manager.execute_query_to_df(query)
 
     # Create a Plotly Express line chart
-    fig = px.bar(df, x='Usage_Date', y='Usage_Quantity', 
+    fig = px.bar(df, x='Usage_Date', y='Usage Amount', 
                     title='Daily Usage By Tag Policy Match',
                     color='Tag Match',
-                    labels={'Usage_Quantity': 'Usage Quantity', 'Usage_Date': 'Usage Date'},
+                    labels={'Usage Amount': 'Usage Amount', 'Usage_Date': 'Usage Date'},
                     barmode="group",
                     #bargap=0.15,
                     #bargroupgap=0.1,
@@ -293,8 +246,8 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     #### Matched Usage Indicator
     ind_query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=MATCHED_IND_QUERY)
     ind_df = system_query_manager.execute_query_to_df(ind_query)
-    matched_value = safe_round(ind_df['Matched Usage Quantity'][0], 0)
-    not_matched_value = safe_round(ind_df['Not Matched Usage Quantity'][0], 0)
+    matched_value = safe_round(ind_df['Matched Usage Amount'][0], 0)
+    not_matched_value = safe_round(ind_df['Not Matched Usage Amount'][0], 0)
 
 
     #### Percent Matched Usage Indicator
@@ -317,7 +270,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             mode="number",
                             value=safe_round(safe_add(matched_value, not_matched_value), 1) ,
                             title={"text": "Total Usage", 'font': {'size': 24}},
-                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': ','},
+                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': '$,'},
                             domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
                             ))
     
@@ -335,7 +288,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             mode="number+gauge",
                             value=matched_value,
                             title={"text": "Matched Usage", 'font': {'size': 24}},
-                            number={'font': {'size': 24, 'color': "#097969"}, 'valueformat': ','},
+                            number={'font': {'size': 24, 'color': "#097969"}, 'valueformat': '$,'},
                             gauge={'shape': "angular",
                             'axis': {'range': [0, matched_value + not_matched_value]},
                             'bar': {'color': "#097969"},
@@ -355,7 +308,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             mode="number+gauge",
                             value=not_matched_value,
                             title={"text": "Not Matched Usage", 'font': {'size': 24}},
-                            number={'font': {'size': 24, 'color': '#8B0000'}, 'valueformat': ','},
+                            number={'font': {'size': 24, 'color': '#8B0000'}, 'valueformat': '$,'},
                             gauge={'shape': "angular",
                             'axis': {'range': [0, matched_value + not_matched_value]},
                             'bar': {'color': '#8B0000'},
@@ -378,7 +331,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                                                tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
                                                final_agg_query=TAG_VALUES_QUERY)
     
-    values_df = system_query_manager.execute_query_to_df(values_query).sort_values(by='Usage Quantity', ascending=True)
+    values_df = system_query_manager.execute_query_to_df(values_query).sort_values(by='Usage Amount', ascending=True)
 
     ## Color Gradient
 
@@ -391,7 +344,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     tag_values_bar = go.Figure(
         go.Bar(
             y=values_df['Tag Value In Policy'],
-            x=values_df['Usage Quantity'],
+            x=values_df['Usage Amount'],
             orientation='h',
             #text_auto=True,
             marker_color=colors_gradient
@@ -415,8 +368,8 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                                                tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
                                                final_agg_query=HEATMAP_QUERY)
     
-    heat_map_df = system_query_manager.execute_query_to_df(heat_map_query).sort_values(by='Usage Quantity', ascending=True) 
-    heat_pivot = heat_map_df.pivot_table(values='Usage Quantity', index='Tag', columns='Product', fill_value=0)
+    heat_map_df = system_query_manager.execute_query_to_df(heat_map_query).sort_values(by='Usage Amount', ascending=True) 
+    heat_pivot = heat_map_df.pivot_table(values='Usage Amount', index='Tag', columns='Product', fill_value=0)
     #heat_pivot['Total'] = heat_pivot.sum(axis=1)
 
     # Define the number of steps in the gradient

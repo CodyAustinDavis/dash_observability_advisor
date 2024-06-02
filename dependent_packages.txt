@@ -1,7 +1,9 @@
-express
 plotly
 dash
 pandas
 dash-ag-grid
 databricks-sql-connector
 dash-canvas
+sqlalchemy
+dash_bootstrap_components
+python-dotenv

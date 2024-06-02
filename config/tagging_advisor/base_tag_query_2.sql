@@ -25,9 +25,22 @@ parsed_keys_all AS (
         parsed_tagging_table
 ),
 
+
+px_all AS (
+  SELECT DISTINCT
+  sku_name,
+  pricing.default AS unit_price,
+  unit_price::decimal(10,3) AS sku_price
+  FROM system.billing.list_prices 
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY sku_name ORDER BY price_start_time DESC) = 1
+  ),
+
+
 final_parsed_query AS (
   SELECT
     *,
+    -- TO DO: Add Discounts Table Later
+    ((1-COALESCE(NULL, 0))*sku_price)*usage_quantity AS Dollar_DBUs,
     -- Get Total Keys Required
     -- Now tag combos can be matched in 2 separate ways: key only, or the key=value pair if optionall provided
     (
@@ -98,4 +111,5 @@ final_parsed_query AS (
     array_distinct(split(MatchedTagValues, ";")) AS TagCombos
   FROM
     clean_usage AS u
+  INNER JOIN px_all AS px ON px.sku_name = u.sku_name
 )
