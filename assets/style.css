@@ -127,3 +127,40 @@
     border-left-color: #002147 !important; /* Navy blue for the spinning part */
     color: #002147 !important;
 }
+
+.radio-custom {
+    padding: 20px;
+    font-size: 20px;
+    color: #002147; /* Navy blue */
+}
+
+.radio-custom-label {
+    display: inline-block;
+    background-color: #f0f0f0;
+    color: #002147;
+    font-size: 18px;
+    padding: 10px 20px;
+    margin-right: 20px;
+    border-radius: 20px;
+    transition: background-color 0.3s, color 0.3s;
+    cursor: pointer;
+}
+
+.radio-custom .Select-input input {
+    margin-right: 10px; /* Space between the radio button and the label */
+}
+
+.radio-custom-label {
+    margin-right: 20px; /* Space between radio items */
+}
+
+/* Hover effect for radio labels */
+.radio-custom-label:hover {
+    background-color: #e0e0e0;
+}
+
+/* Styling for selected radio label */
+.radio-custom input[type="radio"]:checked + label {
+    background-color: #002147;  /* Navy blue */
+    color: white;
+}

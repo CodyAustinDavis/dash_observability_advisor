@@ -14,6 +14,10 @@ TO DO:
 7. Create LLM to generate visuals for system tables upon request
 8. Create Materialized View
 
+
+BUGS: 
+1. Make filters update based on other selected filter values
+
 """
 
 
@@ -27,11 +31,14 @@ from page_functions import *
 from data_functions import *
 from chart_functions import ChartFormats
 import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+import pandas as pd
 
 
 ## Log SQL Alchemy Commands
-#logging.basicConfig(level=logging.ERROR)
-#logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)
+logging.basicConfig(level=logging.ERROR)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 ## Initialize Database
 
@@ -63,7 +70,7 @@ TAG_QUERY_4 = read_sql_file("./config/tag_query_4.sql") ## Where you filter the 
 
 ##### Load Dynamic SQL Files
 def build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, 
-                                start_date, end_date, 
+                                start_date, end_date, tag_filter,
                                 product_category = None, 
                                 tag_policies = None, tag_keys = None, tag_values = None, 
                                 final_agg_query=None):
@@ -92,6 +99,12 @@ def build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3,
         product_categories_str = ', '.join([f"'{key}'" for key in product_category]) 
         FINAL_QUERY = FINAL_QUERY + f"\n AND billing_origin_product IN ({product_categories_str})"
 
+    if tag_filter == 'Matched':
+        FINAL_QUERY = FINAL_QUERY + f"\n AND IsTaggingMatch = 'In Policy' "
+    elif tag_filter == 'Not Matched':
+        FINAL_QUERY = FINAL_QUERY + f"\n AND IsTaggingMatch = 'Not Matched To Tag Policy' "
+    else: 
+        pass
     
     ## Final Select Statement -- this is after all the standard server-side filtering
 
@@ -175,7 +188,12 @@ def render_page_content(pathname):
 
 @app.callback(
     Output('usage-by-match-chart', 'figure'),
+    Output('matched-usage-ind', 'figure'),
+    Output('unmatched-usage-ind', 'figure'),
+    Output('usage-by-tag-value-chart', 'figure'),
+    Output('usage-heatmap', 'figure'),
     Input('update-params-button', 'n_clicks'),
+    State('tag-filter-dropdown', 'value'),
     State('start-date-picker', 'date'),
     State('end-date-picker', 'date'),
     State('product-category-dropdown', 'value'), ## Tuple
@@ -183,10 +201,7 @@ def render_page_content(pathname):
     State('tag-key-dropdown', 'value'), ## Tuple
     State('tag-value-dropdown', 'value'), ## Tuple
 )
-def update_usage_by_match(n_clicks, start_date, end_date, product_category, tag_policies, tag_keys, tag_values):
-
-    print(f"Clicked: {n_clicks}, Start Date: {start_date}, End Date: {end_date}")
-    print(f"Tag Policies: {tag_policies}, Tag Keys: {tag_keys}, Tag Values: {tag_values}")
+def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_category, tag_policies, tag_keys, tag_values):
 
     # Define the color mapping for compliance
     color_map = {
@@ -197,66 +212,194 @@ def update_usage_by_match(n_clicks, start_date, end_date, product_category, tag_
     AGG_QUERY = """
                 SELECT usage_date AS Usage_Date, 
                 SUM(usage_quantity) AS Usage_Quantity,
-                IsTaggingMatch AS Tag_Match
+                IsTaggingMatch AS `Tag Match`
                 FROM filtered_result
                 GROUP BY usage_date, IsTaggingMatch
                 """
 
-    ## If no clicks, use default paramters - just date range defaults
-    if n_clicks == 0:
-
-        query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, start_date=start_date, end_date=end_date, product_category= product_category, final_agg_query=AGG_QUERY)
-
-                # Convert the result to a DataFrame
-        df = system_query_manager.execute_query_to_df(query)
-
-        # Create a Plotly Express line chart
-        fig = px.bar(df, x='Usage_Date', y='Usage_Quantity', 
-                     title='Daily Usage By Tag Policy Match',
-                     color='Tag_Match',
-                     labels={'Usage_Quantity': 'Usage Quantity', 'Usage_Date': 'Usage Date'},
-                     barmode='stack',
-                     color_discrete_map=color_map)
-        fig.update_layout(ChartFormats.common_chart_layout())
-        fig.update_layout(
-                legend=dict(
-                    x=0,
-                    y=-0.3,  # You may need to adjust this depending on your specific plot configuration
-                    orientation="h"  # Horizontal legend
-                )
-            )
-
-        return fig
-
-    elif n_clicks > 0:
-
-        # Convert the result to a DataFrame
-        query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=AGG_QUERY)
-
-                # Convert the result to a DataFrame
-        df = system_query_manager.execute_query_to_df(query)
-
-        # Create a Plotly Express line chart
-        fig = px.bar(df, x='Usage_Date', y='Usage_Quantity', 
-                     title='Daily Usage By Tag Policy Match',
-                     color='Tag_Match',
-                     labels={'Usage_Quantity': 'Usage Quantity', 'Usage_Date': 'Usage Date'},
-                     barmode='stack',
-                     color_discrete_map=color_map)
-        
-        fig.update_layout(ChartFormats.common_chart_layout())
-        fig.update_layout(
-                legend=dict(
-                    x=0,
-                    y=-0.3,  # You may need to adjust this depending on your specific plot configuration
-                    orientation="h"  # Horizontal legend
-                )
-            )
-
-        return fig
+    MATCHED_IND_QUERY = """
+                        SELECT 
+                        SUM(CASE WHEN IsTaggingMatch = 'In Policy' THEN usage_quantity ELSE 0 END) AS `Matched Usage Quantity`,
+                        SUM(CASE WHEN IsTaggingMatch = 'Not Matched To Tag Policy' THEN usage_quantity ELSE 0 END) AS `Not Matched Usage Quantity`
+                        FROM filtered_result
+                        """
     
-    else: 
-        return None
+
+    TAG_VALUES_QUERY = """
+                 , exploded_tags AS 
+                    (SELECT
+                    explode(TagCombos) AS PolicyTagValue,
+                    usage_quantity AS Usage_Quantity
+                    FROM 
+                    filtered_result
+                    )
+
+                    SELECT CASE WHEN len(PolicyTagValue) = 0 
+                            THEN 'Not In Policy' ELSE PolicyTagValue END 
+                            AS `Tag Value In Policy`,
+                     SUM(Usage_Quantity) AS `Usage Quantity`
+                    FROM exploded_tags
+                    GROUP BY CASE WHEN len(PolicyTagValue) = 0 THEN 'Not In Policy' ELSE PolicyTagValue END 
+                    ORDER BY `Usage Quantity` DESC
+                """
+    
+    HEATMAP_QUERY = """ 
+                    , exploded_tags AS (
+                    SELECT
+                        explode(TagCombos) AS PolicyTagValue,
+                        usage_quantity AS Usage_Quantity,
+                        billing_origin_product AS Product
+                    FROM
+                        filtered_result
+                    )
+
+                    SELECT 
+                    PolicyTagValue AS Tag,
+                    Product AS Product,
+                    SUM(usage_quantity) AS `Usage Quantity`
+                    FROM exploded_tags
+                    GROUP BY  PolicyTagValue,
+                    Product
+                """
+    
+
+    # Convert the result to a DataFrame
+    query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=AGG_QUERY)
+    # Convert the result to a DataFrame
+    df = system_query_manager.execute_query_to_df(query)
+
+    # Create a Plotly Express line chart
+    fig = px.bar(df, x='Usage_Date', y='Usage_Quantity', 
+                    title='Daily Usage By Tag Policy Match',
+                    color='Tag Match',
+                    labels={'Usage_Quantity': 'Usage Quantity', 'Usage_Date': 'Usage Date'},
+                    barmode="group",
+                    #bargap=0.15,
+                    #bargroupgap=0.1,
+                    color_discrete_map=color_map)
+    
+    fig.update_layout(ChartFormats.common_chart_layout())
+    fig.update_layout(
+            legend=dict(
+                x=0,
+                y=-0.3,  # You may need to adjust this depending on your specific plot configuration
+                orientation="h"  # Horizontal legend
+            )
+        )
+    
+
+    #### Matched Usage Indicator
+    ind_query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=MATCHED_IND_QUERY)
+    ind_df = system_query_manager.execute_query_to_df(ind_query)
+    matched_value = safe_round(ind_df['Matched Usage Quantity'][0], 0)
+    not_matched_value = safe_round(ind_df['Not Matched Usage Quantity'][0], 0)
+
+
+    matched_fig = go.Figure(go.Indicator(
+                            mode="number+gauge",
+                            value=matched_value,
+                            title={"text": "Matched Usage", 'font': {'size': 18}},
+                            number={'font': {'size': 24, 'color': "#097969"}, 'valueformat': ','},
+                            gauge={'shape': "angular",
+                            'axis': {'range': [0, matched_value + not_matched_value]},
+                            'bar': {'color': "#097969"},
+                            'bgcolor': "white",
+                            'borderwidth': 2,
+                            'bordercolor': "#002147"},
+                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            ))
+    
+    matched_fig.update_layout(
+        height=180,
+        margin=dict(l=10, r=10, t=50, b=10)
+    )
+
+    #### Not Matched Usage Indicator
+    unmatched_fig = go.Figure(go.Indicator(
+                            mode="number+gauge",
+                            value=not_matched_value,
+                            title={"text": "Not Matched Usage", 'font': {'size': 18}},
+                            number={'font': {'size': 24, 'color': '#8B0000'}, 'valueformat': ','},
+                            gauge={'shape': "angular",
+                            'axis': {'range': [0, matched_value + not_matched_value]},
+                            'bar': {'color': '#8B0000'},
+                            'bgcolor': "white",
+                            'borderwidth': 2,
+                            'bordercolor': "#002147"},
+                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            ))
+    
+    unmatched_fig.update_layout(
+        height=180,
+        margin=dict(l=10, r=10, t=50, b=10)
+    )
+
+
+    #### Usage By Tag Value Bar Chart
+    values_query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, 
+                                               tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
+                                               product_category=product_category, 
+                                               tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
+                                               final_agg_query=TAG_VALUES_QUERY)
+    
+    values_df = system_query_manager.execute_query_to_df(values_query).sort_values(by='Usage Quantity', ascending=True)
+
+    ## Color Gradient
+
+    norm = np.linspace(0, 1, len(values_df))
+    colors_gradient = [
+    f"rgb({int(182 - 182 * x)}, {int(217 - 143 * x)}, {int(168 - 56 * x)})"
+    for x in norm
+    ]
+
+    tag_values_bar = go.Figure(
+        go.Bar(
+            y=values_df['Tag Value In Policy'],
+            x=values_df['Usage Quantity'],
+            orientation='h',
+            #text_auto=True,
+            marker_color=colors_gradient
+        )
+    )
+    tag_values_bar.update_layout(ChartFormats.common_chart_layout())
+
+    # Update layout for a better look
+    tag_values_bar.update_layout(
+    title='Usage by Tag Value',
+    xaxis_title='Total Usage',
+    yaxis_title='Tag Policy Value'
+    )
+    tag_values_bar.update_layout(xaxis_type = "log")
+
+
+    #### Tags By SKU Heatmap
+    heat_map_query = build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3, 
+                                               tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
+                                               product_category=product_category, 
+                                               tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
+                                               final_agg_query=HEATMAP_QUERY)
+    
+    heat_map_df = system_query_manager.execute_query_to_df(heat_map_query).sort_values(by='Usage Quantity', ascending=True) 
+    heat_pivot = heat_map_df.pivot_table(values='Usage Quantity', index='Tag', columns='Product', fill_value=0)
+    #heat_pivot['Total'] = heat_pivot.sum(axis=1)
+
+    heat_map_fig = go.Figure(data=go.Heatmap(
+                   z=heat_pivot.values,  # Provide the values from the pivot table
+                   x=heat_pivot.columns,  # Set the x-axis to Product names
+                   y=heat_pivot.index,    # Set the y-axis to Tag names
+                   colorscale=colors_gradient,
+                   hoverongaps = False))
+
+
+    heat_map_fig.update_layout(
+        title='Heatmap of Usage Quantity by Product and Tag',
+        xaxis_title='Product',
+        yaxis_title='Tag'
+    )
+
+    heat_map_fig.update_layout(ChartFormats.common_chart_layout())
+
+    return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig
 
 
 

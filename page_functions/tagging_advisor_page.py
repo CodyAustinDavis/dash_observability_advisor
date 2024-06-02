@@ -112,8 +112,27 @@ def render_tagging_advisor_page():
         html.Div([
                 dbc.Row([
                 dbc.Col([
-                    html.H1("Tagging Advisor", style={'color': '#1d475c'}),  # A specific shade of blue
-                ], width=10),
+                    html.H1("Databricks Tagging Advisor", style={'color': '#002147'}),  # A specific shade of blue
+                ], width=8),
+                dbc.Col([
+                    html.Div([
+                        html.Label('Tag Match Filter', style={'font-weight': 'bold', 'color': '#002147'}),
+                        # RadioItems component for the filter
+                            dcc.Dropdown(
+                                id='tag-filter-dropdown',
+                                options=[
+                                    {'label': 'Matched', 'value': 'Matched'},
+                                    {'label': 'Not Matched', 'value': 'Not Matched'},
+                                    {'label': 'All', 'value': 'All'}
+                                ],
+                                value='All', 
+                                multi=False,
+                                clearable=False  # Prevents user from clearing the selection, ensuring a selection is always active
+                            , style={'margin-bottom': '2px', 'margin-top': '10px'}),
+                            # Output component to display the result based on the selected filter
+                            html.Div(id='filter-output')
+                    ])
+                ], width=2),
                 dbc.Col([
                     html.Button('Update Parameters', id='update-params-button', n_clicks=0, className = 'prettier-button'),  # A specific shade of blue
                 ], width=2)
@@ -122,7 +141,7 @@ def render_tagging_advisor_page():
         html.Div([
             dbc.Row([
                 dbc.Col([
-                    html.Div([html.Label("Start Date", htmlFor='start-date-picker', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px', 'margin-right': '10px'})
+                    html.Div([html.Label("Start Date", htmlFor='start-date-picker', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px','margin-left': '5px', 'margin-right': '10px'})
                 ], width=1),
                 dbc.Col([
                     html.Div([html.Label("End Date", htmlFor='end-date-picker', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px', 'margin-left': '10px'})
@@ -157,7 +176,7 @@ def render_tagging_advisor_page():
                             initial_visible_month=current_date_filter,
                             date=str(day_30_rolling_filter)
                         )
-                    ], style={'margin-bottom': '2px', 'margin-top': '2px', 'margin-right': '20px'})
+                    ], style={'margin-bottom': '2px', 'margin-top': '2px', 'margin-left': '5px', 'margin-right': '20px'})
                 ], width=1),
                 dbc.Col([
                     html.Div([
@@ -213,6 +232,42 @@ def render_tagging_advisor_page():
             ], style={'margin-bottom': '2px', 'margin-top': '2px'})], id='filter-panel'),
         ## Build Visual Layer
         html.Div([
+
+            ## Number Summary Card
+            dbc.Row([
+                dbc.Col([
+                    html.Div([
+                            dcc.Loading(
+                                id="loading-matched-usage-chart",
+                                type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
+                                children=html.Div([dcc.Graph(id='matched-usage-ind', className = 'chart-visuals')]),
+                                fullscreen=False,  # True to make the spinner fullscreen
+                                color= '#002147')
+                            ])
+                ], width=3),
+                dbc.Col([
+                    html.Div([
+                            dcc.Loading(
+                                id="loading-unmatched-usage-chart",
+                                type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
+                                children=html.Div([dcc.Graph(id='unmatched-usage-ind', className = 'chart-visuals')]),
+                                fullscreen=False,  # True to make the spinner fullscreen
+                                color= '#002147')
+                            ])
+                ], width=3),
+                dbc.Col([
+                    html.Div([
+                            dcc.Loading(
+                                id="loading-tag-histogram-total",
+                                type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
+                                children=html.Div([dcc.Graph(id='usage-heatmap', className = 'chart-visuals')]),
+                                fullscreen=False,  # True to make the spinner fullscreen
+                                color= '#002147')
+                            ])
+                        ], width=6)
+            ], id='output-data'),
+
+            ### Chart Row (2 Charts)
             dbc.Row([
                 dbc.Col([
                     html.Div([
@@ -221,10 +276,19 @@ def render_tagging_advisor_page():
                                 type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
                                 children=html.Div([dcc.Graph(id='usage-by-match-chart', className = 'chart-visuals')]),
                                 fullscreen=False,  # True to make the spinner fullscreen
-                                color= '#002147'
-                            )
-                ])
-            ])
+                                color= '#002147')
+                            ])
+                        ], width=6),
+                dbc.Col([
+                    html.Div([
+                            dcc.Loading(
+                                id="loading-tag-histogram",
+                                type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
+                                children=html.Div([dcc.Graph(id='usage-by-tag-value-chart', className = 'chart-visuals')]),
+                                fullscreen=False,  # True to make the spinner fullscreen
+                                color= '#002147')
+                            ])
+                        ], width=6)
             ], id='output-data')
         ]
         ),
