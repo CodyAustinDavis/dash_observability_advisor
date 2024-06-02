@@ -164,3 +164,32 @@
     background-color: #002147;  /* Navy blue */
     color: white;
 }
+
+.ag-root-wrapper {
+    background-color: white;  /* Matches the plot and paper bgcolor */
+    border: 2px solid #002147;  /* Navy blue border */
+}
+
+.ag-root-wrapper .ag-row.ag-row-hover {
+    background-color: #002147 !important; /* Navy blue background on hover */
+    color: #89A48E !important; /* Forces text color to white for better readability */
+    text-emphasis-color: white;
+}
+
+.ag-header {
+    background-color: white;  /* Matches the header to the background */
+    color: #002147;  /* Navy blue text for headers */
+}
+
+.ag-header-cell {
+    border-right: 1px solid #002147;  /* Navy blue lines between header cells */
+}
+
+.ag-root-wrapper .ag-ltr .ag-cell {
+    border-color: #002147;  /* Navy blue lines for cells */
+}
+
+.ag-row-style-changed {
+    background-color: yellow !important;
+    color: black !important;  /* Adjust text color for readability */
+}

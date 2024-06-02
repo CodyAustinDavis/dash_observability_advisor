@@ -9,8 +9,8 @@ from uuid import UUID
 from dotenv import load_dotenv
 from databricks.sqlalchemy import TIMESTAMP, TINYINT
 import pandas as pd
-from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.ext.automap import automap_base
 from typing import Dict
 from contextlib import contextmanager
 
@@ -29,6 +29,8 @@ from sqlalchemy import (
     Uuid,            # STRING
     create_engine,
     select,
+    text,
+    MetaData,
     Identity
 )
 from sqlalchemy.orm import DeclarativeBase, Session
@@ -72,6 +74,15 @@ class QueryManager:
 
     def get_new_session(self):
         return self.db_session()
+    
+
+    def reflect_table(self, table_name):
+
+        metadata = MetaData()
+        metadata.reflect(self.engine, only=[table_name])
+        Base = automap_base(metadata=metadata)
+        Base.prepare()
+        return Base.classes.get(table_name)
     
 
     def execute_query_to_df(self, sql, **bind_params):

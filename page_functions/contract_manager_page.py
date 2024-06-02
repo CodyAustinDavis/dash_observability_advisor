@@ -12,6 +12,6 @@ from data_functions.backend_database import (
     get_tag_policy_value_filter
 )
 
-def render_model_settings_page():
-    return html.P("Welcome to the Model Settings Page.")
+def render_contract_manager_page():
+    return html.P("Welcome to the Contract Manager Page.")
 

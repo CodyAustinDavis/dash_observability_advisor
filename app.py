@@ -7,12 +7,10 @@ Description: Dash Apps for Tagging and Data Compute Observability
 TO DO: 
 1. Add databricsk SDK for authentication and iteraction with db
 2. Create SQL Alchemy backend and engine - DONE
-3. Create all visuals
 4. Create AG Grid for tags
 5. Create job button for syncing tags with app (tags jobs that arent tagged yet)
 6. Create settings page that lets a user input the workspace name and select the warehouse to execute against. (OAuth)
 7. Create LLM to generate visuals for system tables upon request
-8. Create Materialized View
 
 
 BUGS: 
@@ -22,7 +20,7 @@ BUGS:
 
 
 import dash
-from dash import html, dcc, Input, Output, State
+from dash import html, dcc, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from databricks import sql
 import os
@@ -134,10 +132,10 @@ app.layout = dbc.Container([
                 html.Div([  # Container for the logo and possibly other header elements
                     html.Img(src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto'}),
                     ]),
-                dbc.NavLink("Tagging Advisor", href="/tag-advisor", id="tab-1-link"),
+                dbc.NavLink("Tagging Manager", href="/tag-manager", id="tab-1-link"),
                 dbc.NavLink("Alert Manager", href="/alert-manager", id="tab-2-link"),
-                dbc.NavLink("Settings", href="/settings", id="tab-3-link"),
-                dbc.NavLink("Model Settings", href="/model-settings", id="tab-4-link")
+                dbc.NavLink("Contract Manager", href="/contract-manager", id="tab-3-link"),
+                dbc.NavLink("Settings", href="/settings", id="tab-4-link"),
                 ],
                 vertical=True,
                 pills=True,
@@ -164,7 +162,7 @@ def set_active_tab(pathname):
     if pathname == "/":
         # Assuming the default path should activate the first tab
         return True, False, False, False
-    return pathname == "/tag-advisor", pathname == "/alert-manager", pathname == "/settings", pathname == "/model-settings"
+    return pathname == "/tag-manager", pathname == "/alert-manager", pathname == "/contract-manager", pathname == "/settings", 
 
 
 # Callback to update the content based on tab selection
@@ -177,14 +175,14 @@ def render_page_content(pathname):
     ## TO DO: Add authentication screen
     ## Can one of these be called from an LLM to create visuals???
 
-    if pathname == "/tag-advisor":
+    if pathname == "/tag-manager":
         return render_tagging_advisor_page()
     elif pathname == "/alert-manager":
         return render_alert_manager_page()
+    elif pathname == "/contract-manager":
+        return render_contract_manager_page()
     elif pathname == "/settings":
         return render_settings_page()
-    elif pathname == "/model-settings":
-        return render_model_settings_page()
     else:
         return render_tagging_advisor_page()
 
@@ -207,8 +205,8 @@ def render_page_content(pathname):
     State('end-date-picker', 'date'),
     State('product-category-dropdown', 'value'), ## Tuple
     State('tag-policy-dropdown', 'value'), ## Tuple
-    State('tag-key-dropdown', 'value'), ## Tuple
-    State('tag-value-dropdown', 'value'), ## Tuple
+    State('tag-policy-key-dropdown', 'value'), ## Tuple
+    State('tag-policy-value-dropdown', 'value'), ## Tuple
 )
 def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_category, tag_policies, tag_keys, tag_values):
 
@@ -278,10 +276,6 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
         height=180,
         margin=dict(l=10, r=10, t=10, b=10)
     )
-
-
-
-    
 
     #### Matched Usage Amount Indicator Guage
     matched_fig = go.Figure(go.Indicator(
@@ -402,6 +396,95 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     heat_map_fig.update_layout(ChartFormats.common_chart_layout())
 
     return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig, percent_match_fig, total_usage_fig
+
+##### AG Grid Callbacks
+
+## Tag policy Management
+## Incrementally Store and Manage Changes to the tag policy AG Grid
+## Clear and Reload saved policies
+
+@app.callback(
+    [Output('policy-changes-store', 'data'),
+     Output('tag-policy-ag-grid', 'rowData'),
+     Output('policy-change-indicator', 'style'),
+     #Output('changes-display', 'children'), DEBUG
+     Output('loading-save-policies', 'children'),
+     Output('loading-clear-policies', 'children'),
+     Output('tag-policy-dropdown', 'options'),
+     Output('tag-policy-key-dropdown', 'options'),
+     Output('tag-policy-value-dropdown', 'options')],
+    [Input('tag-policy-save-btn', 'n_clicks'), 
+     Input('tag-policy-clear-btn', 'n_clicks'),
+     Input('tag-policy-ag-grid', 'cellValueChanged')], 
+    [State('policy-changes-store', 'data')]  # Current state of stored changes
+)
+def handle_policy_changes(save_clicks, clear_clicks, cell_change, changes):
+
+    ### Synchronously figure out what action is happening and run the approprite logic. 
+    ## This single-callback method ensure that no strange operation order can happen. Only one can happen at once. 
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    ## Handle Local Updates to Store (do NOT clear store)
+
+    ## Handle Save Button Press
+    if triggered_id == 'tag-policy-save-btn' and save_clicks:
+        if changes:
+            # Save logic here
+            session = system_query_manager.get_new_session()
+            save_loading_content = html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+
+            try:
+                for change in changes:
+                    record_id = change.get('tag_policy_id')  # Assuming each change dictionary contains 'tag_policy_id'
+                    if record_id:
+                        record = session.query(TagPolicies).get(record_id)
+                        if record:
+                            for key, value in change.items():
+                                if key != 'tag_policy_id':  # Avoid updating the primary key
+                                    setattr(record, key, value)
+                            record.updated_timestamp = datetime.now()  # Update timestamp manually
+                    else:
+                        # Insert new record if no ID is present (if applicable)
+                        new_record = TagPolicies(**change)
+                        session.add(new_record)
+                session.commit()  # Commit all changes
+
+            except Exception as e:
+                session.rollback()  # Rollback if any error occurs
+                raise e
+            finally:
+                session.close()
+
+            
+            # Fetch distinct tag policy names within the context manager
+        with QueryManager.session_scope(system_engine) as session:
+
+            distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
+            distinct_tag_keys = pd.read_sql(session.query(TagPolicies.tag_key).distinct().statement, con=system_engine)
+            distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
+
+            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
+            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
+            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
+
+            return [], get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter
+        
+    ### Handle Clear Button Press
+    elif triggered_id == 'tag-policy-clear-btn' and clear_clicks:
+        clear_loading_content = html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+        return [], get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, dash.no_update, clear_loading_content, dash.no_update, dash.no_update, dash.no_update # Clear changes and reload data
+    
+    
+    elif triggered_id == 'tag-policy-ag-grid' and cell_change:
+        if changes is None:
+            changes = []
+        ## Only store the changed row to get [{<change>}, ...]
+        changes.append(cell_change[0]['data']) 
+        return changes, dash.no_update, {'display': 'block', 'color': 'yellow', 'font-weight': 'bold'}, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    
+
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update  # No action taken
+
 
 
 

@@ -3,6 +3,7 @@ from dash import html, dcc, Input, Output
 import dash_bootstrap_components as dbc
 import pandas as pd
 import os
+import dash_ag_grid as dag
 from datetime import date, datetime, timedelta
 from data_functions.backend_database import (
     QueryManager, 
@@ -29,10 +30,9 @@ from sqlalchemy import create_engine, text
 ###### We want to load the data on app start up for filters so the UX is not slow when we switch tabs
 """
 ###### TO OD: 
-#1. Update Filters to only load the distinct values that are currently selected in the other filters
-#2. VISUAL: Heatmap of Tag Key/Value vs Product Category
-#3. VISUAL: Usage Over Time by Match (yes / no)
+1. Update Filters to only load the distinct values that are currently selected in the other filters
 """
+
 # Load environment variables from .env file
 # Get the directory of the current script
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -61,11 +61,27 @@ system_engine = system_query_manager.get_engine()
 ## Create all init tables that this app needs to exists - We use SQL Alchemy models so we can more easily programmatically write back
 Base.metadata.create_all(system_engine, checkfirst=True)
 
+#### Get Tables to Manage and Write To
+TagPoliciesAGGRid = system_query_manager.reflect_table('app_tag_policies')
+
+
+#### For the Reflection / AG Grid updates
+def get_tag_policies_grid_data():
+    session = system_query_manager.get_new_session()
+    try:
+        query = session.query(TagPoliciesAGGRid)
+        df = pd.read_sql(query.statement, session.bind)
+    finally:
+        session.close()
+    return df #.to_dict('records')
+
+
+#### Run init SQL script to make sure all required tables are created
 sql_init_filepath = './config/init.sql'  # Ensure the path is correct
 execute_sql_from_file(system_engine, sql_init_filepath)
+
+
 ##### Load Parameter Filters
-
-
 ### Create a non-system query manager to read from tables in any catalog/schema
 query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token)
 query_engine = query_manager.get_engine()
@@ -103,16 +119,16 @@ with QueryManager.session_scope(system_engine) as session:
 
 
 
-#### Tagging Advisor Page Function -- Dynamic Rendering
+#### Tagging Advisor Page Function
 def render_tagging_advisor_page():
 
 
     ##### REDER TAGGING PAGE
     layout = html.Div([
         html.Div([
-                dbc.Row([
+            dbc.Row([
                 dbc.Col([
-                    html.H1("Databricks Tagging Advisor", style={'color': '#002147'}),  # A specific shade of blue
+                    html.H1("Databricks Tagging Manager", style={'color': '#002147'}),  # A specific shade of blue
                 ], width=8),
                 dbc.Col([
                     html.Div([
@@ -136,7 +152,15 @@ def render_tagging_advisor_page():
                 dbc.Col([
                     html.Button('Update Parameters', id='update-params-button', n_clicks=0, className = 'prettier-button'),  # A specific shade of blue
                 ], width=2)
-        ])], style={'margin-bottom': '10px'}),
+            ]),
+            html.Div(className='border-top'),
+            dbc.Row([
+                    dbc.Col([
+                    html.P("This app allows users to create tag policies, enforce those policies, and audit their Databricks usage to easily govern and categorize their usage in a way the fits their specific business needs.", style={'color': '#002147', 'margin-top': '10px'}),  # A specific shade of blue
+                ], width=12)
+            ])
+
+        ], style={'margin-bottom': '10px'}),
         html.Div(className='border-top'),
         html.Div([
             dbc.Row([
@@ -151,15 +175,15 @@ def render_tagging_advisor_page():
                     ], style={'margin-bottom': '5px', 'margin-top': '5px'})  # Adds spacing below each filter
                 ], width=3),
                 dbc.Col([
-                    html.Div([html.Div([html.Label("Tag Policy", htmlFor='tag-policy-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
+                    html.Div([html.Div([html.Label("Tag Policy Name", htmlFor='tag-policy-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
                     ], style={'margin-bottom': '5px', 'margin-top': '5px'})  # Adds spacing below each filter
                 ], width=2),
                 dbc.Col([
-                    html.Div([html.Div([html.Label("Tag Key", htmlFor='tag-key-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
+                    html.Div([html.Div([html.Label("Tag Policy Key", htmlFor='tag-policy-key-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
                     ], style={'margin-bottom': '5px', 'margin-top': '5px'})  # Adds spacing below each filter
                 ], width=2),
                 dbc.Col([
-                    html.Div([html.Div([html.Label("Tag Value", htmlFor='tag-value-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
+                    html.Div([html.Div([html.Label("Tag Policy Value", htmlFor='tag-policy-value-dropdown', style={'font-weight': 'bold'})], style={'margin-bottom': '5px', 'margin-top': '5px'})
                     ], style={'margin-bottom': '5px', 'margin-top': '5px'})  # Adds spacing below each filter
                 ], width=2)
 
@@ -212,7 +236,7 @@ def render_tagging_advisor_page():
                 dbc.Col([
                     html.Div([
                         dcc.Dropdown(
-                            id='tag-key-dropdown',
+                            id='tag-policy-key-dropdown',
                             options=tag_key_filter,
                             placeholder="Tag Key Name",
                             multi=True
@@ -222,7 +246,7 @@ def render_tagging_advisor_page():
                 dbc.Col([
                     html.Div([
                         dcc.Dropdown(
-                            id='tag-value-dropdown',
+                            id='tag-policy-value-dropdown',
                             options=tag_value_filter,
                             placeholder="Tag Value Name",
                             multi=True
@@ -315,6 +339,68 @@ def render_tagging_advisor_page():
         ]
         ),
         html.Div(className='border-top'),
+        html.Div([
+            dbc.Row([
+                dbc.Col([
+                    html.H3("Tag Audit Management", style={'color': '#002147'}),  # A specific shade of blue
+                ], width=12)
+            ]),
+            html.Div(className='border-top'),
+            dbc.Row([
+                    dbc.Col([
+                    html.P("This section allows users to create & manage tagging policies, find clusters/warehouses as well as jobs that are not properly tagged into the policies. \n Once these entities are found, they can then be properly categorized and tagging in the app.", style={'color': '#002147'}),  # A specific shade of blue
+                ], width=12)
+            ]),
+
+            ### AG Grids!
+            ## When "Save Policy Change is pushed, callback must update filter selections as well as the UI for the Grid
+            ## The callback must also show a ! logo when there are unsaved changes
+            ## The logo then needs to clear the Store when changed are saved and reloaded
+            dbc.Row([
+                    dbc.Col([
+                    html.Div([
+                        dbc.Row([
+                            dbc.Col([
+                                    dcc.Loading(
+                                    id="loading-save-policies",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                )
+                            ], width=6),
+                            dbc.Col([
+                                dcc.Loading(
+                                    id="loading-clear-policies",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                )
+                            ], width=6),
+                        ]),
+                        html.Div(id='policy-change-indicator', children=[
+                                html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
+                            ], style={'display': 'none'}),
+                        ## DEGBUG -- html.Div(id='changes-display'),  # This Div will show the changes
+                            dag.AgGrid(
+                                id='tag-policy-ag-grid',
+                                columnDefs=[
+                                    {'headerName': 'Policy Id', 'field': 'tag_policy_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True},
+                                    {'headerName': 'Policy Name', 'field': 'tag_policy_name', 'editable': True, 'enableCellChangeFlash':True},
+                                    {'headerName': 'Tag Key', 'field': 'tag_key', 'editable': True, 'enableCellChangeFlash':True},
+                                    {'headerName': 'Tag Value', 'field': 'tag_value', 'editable': True, 'enableCellChangeFlash':True}
+                                ],
+                                rowData=get_tag_policies_grid_data().to_dict('records'),
+                                dashGridOptions={
+                                    'enableRangeSelection': True,
+                                    'rowSelection': 'multiple'
+                                    }
+                            ),
+                            dcc.Store(id='policy-changes-store')
+                        ])
+                ], width=5, style={'margin-left':'10px', 'margin-right':'10px'})
+            ])
+        ]),
+
     html.Div(id='output-container')
     ])
 
