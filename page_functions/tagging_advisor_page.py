@@ -255,16 +255,38 @@ def render_tagging_advisor_page():
                                 color= '#002147')
                             ])
                 ], width=3),
+                            # Two new indicators or other contents to balance the layout
+                dbc.Col([
+                html.Div([
+                    dcc.Loading(
+                        id="loading-percent-match-ind",  # new ID for additional content
+                        type="default",
+                        children=html.Div([dcc.Graph(id='percent-match-ind', className='chart-visuals')]),
+                        fullscreen=False,
+                        color='#002147')
+                    ])
+                ], width=3),
+
+                dbc.Col([
+                html.Div([
+                    dcc.Loading(
+                        id="loading-total-usage-ind",  # new ID for additional content
+                        type="default",
+                        children=html.Div([dcc.Graph(id='total-usage-ind', className='chart-visuals')]),
+                        fullscreen=False,
+                        color='#002147')
+                ])
+                ], width=3),
                 dbc.Col([
                     html.Div([
                             dcc.Loading(
-                                id="loading-tag-histogram-total",
+                                id="loading-tag-chart",
                                 type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
-                                children=html.Div([dcc.Graph(id='usage-heatmap', className = 'chart-visuals')]),
+                                children=html.Div([dcc.Graph(id='usage-by-match-chart', className = 'chart-visuals')]),
                                 fullscreen=False,  # True to make the spinner fullscreen
                                 color= '#002147')
                             ])
-                        ], width=6)
+                        ], width=12),
             ], id='output-data'),
 
             ### Chart Row (2 Charts)
@@ -272,9 +294,9 @@ def render_tagging_advisor_page():
                 dbc.Col([
                     html.Div([
                             dcc.Loading(
-                                id="loading-tag-chart",
+                                id="loading-tag-histogram-total",
                                 type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
-                                children=html.Div([dcc.Graph(id='usage-by-match-chart', className = 'chart-visuals')]),
+                                children=html.Div([dcc.Graph(id='usage-heatmap', className = 'chart-visuals')]),
                                 fullscreen=False,  # True to make the spinner fullscreen
                                 color= '#002147')
                             ])

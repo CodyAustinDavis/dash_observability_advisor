@@ -192,6 +192,8 @@ def render_page_content(pathname):
     Output('unmatched-usage-ind', 'figure'),
     Output('usage-by-tag-value-chart', 'figure'),
     Output('usage-heatmap', 'figure'),
+    Output('percent-match-ind', 'figure'),
+    Output('total-usage-ind', 'figure'),
     Input('update-params-button', 'n_clicks'),
     State('tag-filter-dropdown', 'value'),
     State('start-date-picker', 'date'),
@@ -295,10 +297,44 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     not_matched_value = safe_round(ind_df['Not Matched Usage Quantity'][0], 0)
 
 
+    #### Percent Matched Usage Indicator
+    percent_match_fig = go.Figure(go.Indicator(
+                            mode="number",
+                            value=safe_divide(matched_value, safe_add(matched_value, not_matched_value)) ,
+                            title={"text": "% Matched Usage", 'font': {'size': 24}},
+                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': ',.1%'},
+                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            ))
+    
+    percent_match_fig.update_layout(
+        height=180,
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+
+
+    #### Total Usage Indicator
+    total_usage_fig = go.Figure(go.Indicator(
+                            mode="number",
+                            value=safe_round(safe_add(matched_value, not_matched_value), 1) ,
+                            title={"text": "Total Usage", 'font': {'size': 24}},
+                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': ','},
+                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            ))
+    
+    total_usage_fig.update_layout(
+        height=180,
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+
+
+
+    
+
+    #### Matched Usage Amount Indicator Guage
     matched_fig = go.Figure(go.Indicator(
                             mode="number+gauge",
                             value=matched_value,
-                            title={"text": "Matched Usage", 'font': {'size': 18}},
+                            title={"text": "Matched Usage", 'font': {'size': 24}},
                             number={'font': {'size': 24, 'color': "#097969"}, 'valueformat': ','},
                             gauge={'shape': "angular",
                             'axis': {'range': [0, matched_value + not_matched_value]},
@@ -318,7 +354,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     unmatched_fig = go.Figure(go.Indicator(
                             mode="number+gauge",
                             value=not_matched_value,
-                            title={"text": "Not Matched Usage", 'font': {'size': 18}},
+                            title={"text": "Not Matched Usage", 'font': {'size': 24}},
                             number={'font': {'size': 24, 'color': '#8B0000'}, 'valueformat': ','},
                             gauge={'shape': "angular",
                             'axis': {'range': [0, matched_value + not_matched_value]},
@@ -383,11 +419,24 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     heat_pivot = heat_map_df.pivot_table(values='Usage Quantity', index='Tag', columns='Product', fill_value=0)
     #heat_pivot['Total'] = heat_pivot.sum(axis=1)
 
+    # Define the number of steps in the gradient
+    norm_heat = np.linspace(0, 1, len(heat_pivot))
+    heat_colors_gradient = [
+        [0, "rgba(0,0,0,0)"],  # Make 0 values transparent
+        [0.01, "rgb(182, 217, 168)"]  # Start of actual color scale just above 0
+    ]
+
+    # Adding rest of the gradient
+    heat_colors_gradient += [
+        [x, f"rgb({int(182 - 182 * x)}, {int(217 - 143 * x)}, {int(168 - 56 * x)})"]
+        for x in np.linspace(0.01, 1, len(heat_pivot))
+    ]
+
     heat_map_fig = go.Figure(data=go.Heatmap(
                    z=heat_pivot.values,  # Provide the values from the pivot table
                    x=heat_pivot.columns,  # Set the x-axis to Product names
                    y=heat_pivot.index,    # Set the y-axis to Tag names
-                   colorscale=colors_gradient,
+                   colorscale=heat_colors_gradient,
                    hoverongaps = False))
 
 
@@ -399,7 +448,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
 
     heat_map_fig.update_layout(ChartFormats.common_chart_layout())
 
-    return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig
+    return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig, percent_match_fig, total_usage_fig
 
 
 
