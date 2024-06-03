@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,          # STRING
     Time,            # STRING
     Uuid,            # STRING
+    func,
     create_engine,
     select,
     text,
@@ -233,9 +234,9 @@ class AppComputeTags(Base):
 class TagPolicies(Base):
     __tablename__ = "app_tag_policies"
 
-    tag_policy_id = Column(BigInteger, Identity(always=True), primary_key = True)
+    tag_policy_id = Column(BigInteger, Identity(always=True), primary_key = True, autoincrement=True)
     tag_policy_name = Column(String, nullable=False)
     tag_policy_description = Column(String, nullable=True)
     tag_key = Column(String, nullable=False)
     tag_value = Column(String, nullable=True)
-    update_timestamp = Column(TIMESTAMP, nullable=False)
+    update_timestamp = Column(TIMESTAMP, nullable=False, default=func.now())

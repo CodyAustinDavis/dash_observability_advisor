@@ -107,6 +107,8 @@ df_job_id_filter = get_job_id_category_filter(system_engine)
 #df_tag_value_filter = get_tag_policy_value_filter(system_engine)
 
 # Fetch distinct tag policy names within the context manager
+
+# Create a session factory with autocommit enabled
 with QueryManager.session_scope(system_engine) as session:
 
     distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
@@ -118,9 +120,21 @@ with QueryManager.session_scope(system_engine) as session:
     tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
 
 
-
 #### Tagging Advisor Page Function
 def render_tagging_advisor_page():
+
+
+    cellStyle = {
+        "styleConditions": [
+        {"condition": "highlightEdits(params)", "style": {"color": "orange"}},
+    ]
+    }
+
+    defaultColDef = {
+    "valueSetter": {"function": "addEdits(params)"},
+    "editable": True,
+    "cellStyle": cellStyle,
+    }
 
 
     ##### REDER TAGGING PAGE
@@ -367,7 +381,7 @@ def render_tagging_advisor_page():
                                     color= '#002147',
                                     children=html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
-                            ], width=6),
+                            ], width=4),
                             dbc.Col([
                                 dcc.Loading(
                                     id="loading-clear-policies",
@@ -375,7 +389,24 @@ def render_tagging_advisor_page():
                                     color= '#002147',
                                     children=html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
-                            ], width=6),
+                            ], width=4),
+                            dbc.Col([
+                                dcc.Loading(
+                                    id="loading-add-policies",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Add +', id='add-policy-row-btn', n_clicks=0, style={'margin-bottom': '10px', 'font-size': '14px'},
+                                    className = 'add-button')
+                                )
+                            ], width=2),
+                             dbc.Col([
+                                dcc.Loading(
+                                    id="loading-remove-policies",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Remove -', id='remove-policy-row-btn', n_clicks=0, style={'margin-bottom': '10px', 'font-size': '14px'}, className = 'remove-button')
+                                )
+                            ], width=2)
                         ]),
                         html.Div(id='policy-change-indicator', children=[
                                 html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
@@ -383,12 +414,39 @@ def render_tagging_advisor_page():
                         ## DEGBUG -- html.Div(id='changes-display'),  # This Div will show the changes
                             dag.AgGrid(
                                 id='tag-policy-ag-grid',
+
+
                                 columnDefs=[
-                                    {'headerName': 'Policy Id', 'field': 'tag_policy_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True},
-                                    {'headerName': 'Policy Name', 'field': 'tag_policy_name', 'editable': True, 'enableCellChangeFlash':True},
-                                    {'headerName': 'Tag Key', 'field': 'tag_key', 'editable': True, 'enableCellChangeFlash':True},
-                                    {'headerName': 'Tag Value', 'field': 'tag_value', 'editable': True, 'enableCellChangeFlash':True}
+                                    {
+                                        'headerName': 'Policy Id', 
+                                        'field': 'tag_policy_id', 
+                                        'editable': False, 
+                                        'width': 100, 
+                                        'suppressSizeToFit': True
+                                    },
+                                    {
+                                        'headerName': 'Policy Name', 
+                                        'field': 'tag_policy_name', 
+                                        'editable': True
+                                    },
+                                    {
+                                        'headerName': 'Tag Key', 
+                                        'field': 'tag_key', 
+                                        'editable': True
+                                    },
+                                    {
+                                        'headerName': 'Tag Value', 
+                                        'field': 'tag_value', 
+                                        'editable': True,
+                                        'enableCellChangeFlash': True,
+                                        'cellStyle': {
+                                            "styleConditions": [
+                                                {"condition": "dagfuncs.highlightEdits(params)", "style": {"backgroundColor": "yellow"}}
+                                            ]
+                                        }
+                                    }
                                 ],
+                                defaultColDef=defaultColDef,
                                 rowData=get_tag_policies_grid_data().to_dict('records'),
                                 dashGridOptions={
                                     'enableRangeSelection': True,

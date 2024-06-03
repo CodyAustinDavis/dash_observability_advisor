@@ -38,6 +38,24 @@
     margin-top: 10px;
 }
 
+.add-button {
+    background-color: white; /* White background on hover */
+    color: #002147; /* Dark blue text on hover */
+    border: 2px solid #048239;  /* Dark navy blue */
+    font-size: 16px;
+    padding: 8px 16px;
+    margin-top: 10px;
+}
+
+.remove-button {
+    background-color: white; /* White background on hover */
+    color: #002147; /* Dark blue text on hover */
+    border: 2px solid #a22607;  /* Dark navy blue */
+    font-size: 16px;
+    padding: 8px 16px;
+    margin-top: 10px;
+}
+
 .prettier-button:hover {
     background-color: #002147;
     color: white;
@@ -172,7 +190,7 @@
 
 .ag-root-wrapper .ag-row.ag-row-hover {
     background-color: #002147 !important; /* Navy blue background on hover */
-    color: #89A48E !important; /* Forces text color to white for better readability */
+    color: #acd5b4 !important; /* Forces text color to white for better readability */
     text-emphasis-color: white;
 }
 
@@ -192,4 +210,9 @@
 .ag-row-style-changed {
     background-color: yellow !important;
     color: black !important;  /* Adjust text color for readability */
+}
+
+.highlight-changed {
+    background-color: rgb(212, 166, 102) !important;
+    color: black !important;
 }
