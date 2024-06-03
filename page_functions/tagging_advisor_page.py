@@ -378,7 +378,7 @@ def render_tagging_advisor_page():
                                     dcc.Loading(
                                     id="loading-save-policies",
                                     type="default",  # Choose the style of the loading animation
-                                    color= '#002147',
+                                    color= '#002147', 
                                     children=html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
                             ], width=4),
@@ -427,24 +427,30 @@ def render_tagging_advisor_page():
                                     {
                                         'headerName': 'Policy Name', 
                                         'field': 'tag_policy_name', 
-                                        'editable': True
+                                        'editable': True,
+                                        'suppressSizeToFit': True
                                     },
                                     {
                                         'headerName': 'Tag Key', 
                                         'field': 'tag_key', 
-                                        'editable': True
+                                        'width': 150, 
+                                        'editable': True,
+                                        'suppressSizeToFit': True
                                     },
                                     {
                                         'headerName': 'Tag Value', 
                                         'field': 'tag_value', 
                                         'editable': True,
                                         'enableCellChangeFlash': True,
+                                        'suppressSizeToFit': True,
                                         'cellStyle': {
                                             "styleConditions": [
                                                 {"condition": "dagfuncs.highlightEdits(params)", "style": {"backgroundColor": "yellow"}}
                                             ]
                                         }
-                                    }
+                                    },
+                                    {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 
+                                    'suppressSizeToFit': True},
                                 ],
                                 defaultColDef=defaultColDef,
                                 rowData=get_tag_policies_grid_data().to_dict('records'),

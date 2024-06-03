@@ -32,6 +32,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
+from sqlalchemy import bindparam
 
 
 ## Log SQL Alchemy Commands
@@ -407,7 +408,6 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     [Output('policy-changes-store', 'data'),
      Output('tag-policy-ag-grid', 'rowData'),
      Output('policy-change-indicator', 'style'),
-     #Output('changes-display', 'children'), DEBUG
      Output('loading-save-policies', 'children'),
      Output('loading-clear-policies', 'children'),
      Output('tag-policy-dropdown', 'options'),
@@ -416,11 +416,13 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     [Input('tag-policy-save-btn', 'n_clicks'), 
      Input('tag-policy-clear-btn', 'n_clicks'),
      Input('tag-policy-ag-grid', 'cellValueChanged'),
-     Input('add-policy-row-btn', 'n_clicks')], 
+     Input('add-policy-row-btn', 'n_clicks'),
+     Input('remove-policy-row-btn', 'n_clicks')], 
     [State('tag-policy-ag-grid', 'rowData'),
-     State('policy-changes-store', 'data')]  # Current state of stored changes
+     State('policy-changes-store', 'data'),
+     State('tag-policy-ag-grid', 'selectedRows')]  # Current state of stored changes
 )
-def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks, row_data, changes):
+def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks, remove_row_clicks, row_data, changes, selected_rows):
 
     ### Synchronously figure out what action is happening and run the approprite logic. 
     ## This single-callback method ensure that no strange operation order can happen. Only one can happen at once. 
@@ -452,79 +454,133 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
         row_data.append(new_row)
         return dash.no_update, row_data, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
+    # Handle removing selected rows
+    if triggered_id == 'remove-policy-row-btn' and remove_row_clicks > 0:
+        ## Only attempt to delete from
+
+        ## TO DO: Be able to remove / delete rows by Row Id as well
+        ids_to_remove = [row['tag_policy_id'] for row in selected_rows if row['tag_policy_id'] is not None]
+        updated_row_data = [row for row in row_data if row['tag_policy_id'] not in ids_to_remove]
+        
+        if ids_to_remove:
+            connection = system_query_manager.get_engine().connect()
+            try:
+                delete_query = text("""
+                    DELETE FROM app_tag_policies
+                    WHERE tag_policy_id IN :ids
+                """).bindparams(bindparam('ids', expanding=True))
+                connection.execute(delete_query, parameters= {'ids':ids_to_remove})
+            except Exception as e:
+                print(f"Error during deletion: {e}")
+                raise e
+            finally:
+                connection.close()
+
+        if changes is not None:
+            updated_changes = [change for change in changes if change['tag_policy_id'] not in ids_to_remove]
+        else:
+            updated_changes = []
+
+                 # Fetch distinct tag policy names within the context manager
+        with QueryManager.session_scope(system_engine) as session:
+
+            distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
+            distinct_tag_keys = pd.read_sql(session.query(TagPolicies.tag_key).distinct().statement, con=system_engine)
+            distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
+
+            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
+            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
+            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
+
+
+        return updated_row_data, get_tag_policies_grid_data().to_dict('records'), dash.no_update, dash.no_update, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter
 
     ## Handle Local Updates to Store (do NOT clear store)
     # Accumulate changes for new records
-
-    # Combine changes for new records
     def group_changes_by_row(changes):
-        grouped_changes = {}
-        for change in changes:
-            row_index = change['row_index']
-            if row_index not in grouped_changes:
-                grouped_changes[row_index] = change.copy()
-            else:
-                for k, v in change.items():
-                    if v:
-                        grouped_changes[row_index][k] = v
-        return list(grouped_changes.values())
+
+        if changes:
+
+            grouped_changes = {}
+            for change in changes:
+                row_index = change['row_index']
+                if row_index not in grouped_changes:
+                    grouped_changes[row_index] = change.copy()
+                else:
+                    for k, v in change.items():
+                        if v:
+                            grouped_changes[row_index][k] = v
+
+            return list(grouped_changes.values())
+        
+        else:
+            return []
+        
 
 
     # Combine changes by row index
+    grouped_changes = []
+
     if changes:
         grouped_changes = group_changes_by_row(changes)
 
     # Handle saving changes
     if triggered_id == 'tag-policy-save-btn' and save_clicks:
+
         connection = system_query_manager.get_engine().connect()
         save_loading_content = html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className='prettier-button')
 
-        #print(f"GROUPED CHANGES DATA: {grouped_changes}")
-        try:
-            # Process grouped changes for both updates and inserts
-            for change in grouped_changes:
-                #print("Combined change data:", change)  # Debug statement
-                record_id = change.get('tag_policy_id')
-                if record_id:
-                    # Update existing record
-                    update_query = text("""
-                        UPDATE app_tag_policies
-                        SET tag_policy_name = :tag_policy_name,
-                            tag_key = :tag_key,
-                            tag_value = :tag_value,
-                            update_timestamp = NOW()
-                        WHERE tag_policy_id = :tag_policy_id
-                    """)
-                    connection.execute(update_query, parameters={
-                        'tag_policy_name': change['tag_policy_name'],
-                        'tag_key': change['tag_key'],
-                        'tag_value': change['tag_value'],
-                        'tag_policy_id': record_id
-                    })
-                else:
-                    # Insert new record
-                    if not change.get('tag_policy_name') or not change.get('tag_key'):
-                        raise ValueError("Missing required fields: 'tag_policy_name' or 'tag_key'")
+        print(f"GROUPED CHANGES DATA: {grouped_changes}")
+        print(changes)
 
-                    insert_params = {k: v for k, v in change.items() if k in ['tag_policy_name', 'tag_key', 'tag_value']}
-                    print(f"INSERT PARAMS: {insert_params}")  # Debug statement
+        if changes:
+            try:
+                # Process grouped changes for both updates and inserts
+                for change in grouped_changes:
+                    #print("Combined change data:", change)  # Debug statement
+                    record_id = change.get('tag_policy_id')
+                    if record_id:
+                        # Update existing record
+                        update_query = text("""
+                            UPDATE app_tag_policies
+                            SET tag_policy_name = :tag_policy_name,
+                                tag_key = :tag_key,
+                                tag_value = :tag_value,
+                                update_timestamp = NOW()
+                            WHERE tag_policy_id = :tag_policy_id
+                        """)
+                        connection.execute(update_query, parameters={
+                            'tag_policy_name': change['tag_policy_name'],
+                            'tag_key': change['tag_key'],
+                            'tag_value': change['tag_value'],
+                            'tag_policy_id': record_id
+                        })
+                    else:
+                        # Insert new record
+                        if not change.get('tag_policy_name') or not change.get('tag_key'):
+                            raise ValueError("Missing required fields: 'tag_policy_name' or 'tag_key'")
 
-                    insert_query = text("""
-                        INSERT INTO app_tag_policies (tag_policy_name, tag_key, tag_value, update_timestamp)
-                        VALUES (:tag_policy_name, :tag_key, :tag_value, NOW())
-                    """)
-                    connection.execute(insert_query, parameters= {'tag_policy_name':insert_params['tag_policy_name'],
-                                       'tag_key':insert_params['tag_key'],
-                                       'tag_value': insert_params['tag_value']})
+                        insert_params = {k: v for k, v in change.items() if k in ['tag_policy_name', 'tag_key', 'tag_value']}
+                        print(f"INSERT PARAMS: {insert_params}")  # Debug statement
 
-        except Exception as e:
-            print(f"Error during save with changes: {changes}")  # Debug error
-            raise e
-        finally:
-            connection.close()
+                        insert_query = text("""
+                            INSERT INTO app_tag_policies (tag_policy_name, tag_key, tag_value, update_timestamp)
+                            VALUES (:tag_policy_name, :tag_key, :tag_value, NOW())
+                        """)
+                        connection.execute(insert_query, parameters= {'tag_policy_name':insert_params['tag_policy_name'],
+                                        'tag_key':insert_params['tag_key'],
+                                        'tag_value': insert_params['tag_value']})
 
+            except Exception as e:
+                print(f"Error during save with changes: {changes}")  # Debug error
+                raise e
+            finally:
+                connection.close()
+
+        else:
+            pass
             
-            # Fetch distinct tag policy names within the context manager
+         # Fetch distinct tag policy names within the context manager
         with QueryManager.session_scope(system_engine) as session:
 
             distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
