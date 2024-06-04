@@ -55,7 +55,7 @@ final_parsed_query AS (
         CONCAT(
           --- Key Only Intersection
           array_intersect(
-            map_keys(u.custom_tags),
+            map_keys(u.clean_tags),
             (
               SELECT
                 MAX(KeyOnlyPolicies)
@@ -67,8 +67,8 @@ final_parsed_query AS (
           -- Key + Value Intersection
           array_intersect(
             TRANSFORM(
-              MAP_KEYS(custom_tags),
-              key -> CONCAT(key, '=', custom_tags [key])
+              MAP_KEYS(clean_tags),
+              key -> CONCAT(key, '=', clean_tags [key])
             ),
             (
               SELECT
@@ -89,7 +89,7 @@ final_parsed_query AS (
                 parsed_keys_all
             )
       ),
-      map_keys(u.custom_tags)
+      map_keys(u.clean_tags)
     ) AS MissingTagKeys,
     size(MatchingTagKeys) AS NumberOfMatchedKeys,
     array_join(MatchingTagKeys, '_') AS TagPolicyKeys,
@@ -97,7 +97,7 @@ final_parsed_query AS (
       CONCAT(
         transform(
           MatchingTagKeys,
-          key -> CONCAT(key, '=', u.custom_tags [key])
+          key -> CONCAT(key, '=', u.clean_tags [key])
         ),
         -- Get Compliant keys without value pair
         FILTER(MatchingTagKeys, x -> POSITION('=' IN x) > 0) -- Pull out the compliant values with the key pair

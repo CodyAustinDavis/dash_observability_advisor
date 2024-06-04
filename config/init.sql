@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS app_sku_discounts
 TBLPROPERTIES('delta.feature.allowColumnDefaults' = 'supported');
 
 
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS clean_usage
 AS
 WITH compute AS (
@@ -30,12 +31,6 @@ SELECT
   c.create_time AS cluster_create_time,
   c.delete_time AS cluster_delete_time,
   CASE WHEN c.delete_time IS NOT NULL AND c.cluster_id IS NOT NULL THEN 1 ELSE 0 END AS IsClusterDeleted,
-  c.driver_node_type,
-  c.worker_node_type,
-  c.min_autoscale_workers,
-  c.max_autoscale_workers,
-  c.auto_termination_minutes,
-  c.worker_count,
   c.tags AS cluster_tags,
   c.cluster_source
 FROM system.compute.clusters c
@@ -49,19 +44,26 @@ px_all AS (
   unit_price::decimal(10,3) AS sku_price
   FROM system.billing.list_prices 
   QUALIFY ROW_NUMBER() OVER (PARTITION BY sku_name ORDER BY price_start_time DESC) = 1
-  )
+  ),
 
+clean_usage AS (
 -- Final Select
 SELECT 
 u.*,
 c.*,
 u.workspace_id AS clean_workspace_id,
-  sku_price*usage_quantity AS Dollar_DBUs_List,
+sku_price*usage_quantity AS Dollar_DBUs_List,
 -- Clean up cluster / warehouse ids from all places
-COALESCE(c.cluster_id, u.usage_metadata.cluster_id, u.usage_metadata.warehouse_id) AS clean_cluster_id,
-COALESCE(c.job_or_pipeline_id, u.usage_metadata.job_id, u.usage_metadata.dlt_pipeline_id, 'Adhoc Or Serving') AS clean_job_or_pipeline_id,
+COALESCE(c.cluster_id, u.usage_metadata.cluster_id) AS clean_cluster_id,
+COALESCE(u.usage_metadata.warehouse_id) AS clean_warehouse_id,
+COALESCE(u.usage_metadata.job_id, u.usage_metadata.dlt_pipeline_id, c.job_or_pipeline_id,  NULL) AS clean_job_or_pipeline_id,
+map_zip_with(
+  IFNULL(u.custom_tags, map()),
+  IFNULL(c.cluster_tags, map()),
+  (k, v1, v2) -> COALESCE(v1, v2)
+) AS clean_tags,
 -- Compute Type
-u.identity_metadata.run_as::string AS UsageOwner,
+COALESCE(u.identity_metadata.run_as::string, c.owned_by) AS clean_usage_owner,
 --Job Type (DLT / Jobs / )
 CASE WHEN u.sku_name LIKE ('%SERVERLESS%') OR u.product_features.is_serverless = 'true' THEN 'Serverless' ELSE 'Self-hosted' END AS IsServerless
 
@@ -74,4 +76,6 @@ LEFT JOIN compute AS c
    --             OR (c.job_or_pipeline_id = 'Adhoc')
    --         )
     )
-;
+)
+
+SELECT * FROM clean_usage;
