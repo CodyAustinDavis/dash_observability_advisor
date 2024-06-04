@@ -133,7 +133,9 @@ def render_tagging_advisor_page():
     defaultColDef = {
     "valueSetter": {"function": "addEdits(params)"},
     "editable": True,
-    "cellStyle": cellStyle,
+    "sortable": True,
+    "filter": True,
+    "cellStyle": cellStyle
     }
 
 
@@ -431,6 +433,12 @@ def render_tagging_advisor_page():
                                         'suppressSizeToFit': True
                                     },
                                     {
+                                        'headerName': 'Policy Description', 
+                                        'field': 'tag_policy_description', 
+                                        'editable': True,
+                                        'suppressSizeToFit': True
+                                    },
+                                    {
                                         'headerName': 'Tag Key', 
                                         'field': 'tag_key', 
                                         'width': 150, 
@@ -441,13 +449,9 @@ def render_tagging_advisor_page():
                                         'headerName': 'Tag Value', 
                                         'field': 'tag_value', 
                                         'editable': True,
+                                        'width': 150, 
                                         'enableCellChangeFlash': True,
-                                        'suppressSizeToFit': True,
-                                        'cellStyle': {
-                                            "styleConditions": [
-                                                {"condition": "dagfuncs.highlightEdits(params)", "style": {"backgroundColor": "yellow"}}
-                                            ]
-                                        }
+                                        'suppressSizeToFit': True
                                     },
                                     {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 
                                     'suppressSizeToFit': True},

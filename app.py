@@ -33,6 +33,7 @@ import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam
+from threading import Thread
 
 
 ## Log SQL Alchemy Commands
@@ -123,32 +124,86 @@ def build_tag_query_from_params(TAG_QUERY_1, TAG_QUERY_2, TAG_QUERY_3,
     return FINAL_QUERY
 
 
+# Function to refresh materialized view
+def refresh_materialized_view():
+    conn = system_query_manager.get_engine().connect()
+    cursor = conn.cursor()
+    cursor.execute("REFRESH MATERIALIZED VIEW clean_usage")
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Function to run the SQL query in a separate thread
+
+def run_query_async():
+    thread = Thread(target=refresh_materialized_view)
+    thread.start()
+    return thread
+
+
+# Initialize a global variable to keep track of the thread
+query_thread = None
 
 # Define the layout of the main app
+
 app.layout = dbc.Container([
+    dcc.Store(id='sidebar-state', data={'is_open': True}),
     dbc.Row([
         dbc.Col([
-            dbc.Nav(
-                [
-                html.Div([  # Container for the logo and possibly other header elements
-                    html.Img(src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto'}),
-                    ]),
-                dbc.NavLink("Tagging Manager", href="/tag-manager", id="tab-1-link"),
-                dbc.NavLink("Alert Manager", href="/alert-manager", id="tab-2-link"),
-                dbc.NavLink("Contract Manager", href="/contract-manager", id="tab-3-link"),
-                dbc.NavLink("Settings", href="/settings", id="tab-4-link"),
-                ],
-                vertical=True,
-                pills=True,
-                className="sidebar"  # Add the class name here
+            dbc.Button("☰", id="toggle-button", n_clicks=0, style={'font-size': '24px', 'width': '50px', 'height': '50px', 'background-color': 'white',
+                                                                                                'color': '#002147',
+                                                                                                'border': '2px solid #002147',
+                                                                                                'margin': '10px', 'margin-left': '30px'}),
+            dbc.Collapse(
+                dbc.Nav(
+                    [
+                        html.Div([  # Container for the logo and possibly other header elements
+                            html.Img(id='sidebar-logo', src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto'}),
+                        ]),
+                        dbc.NavLink("Tagging Manager", href="/tag-manager", id="tab-1-link"),
+                        dbc.NavLink("Alert Manager", href="/alert-manager", id="tab-2-link"),
+                        dbc.NavLink("Contract Manager", href="/contract-manager", id="tab-3-link"),
+                        dbc.NavLink("Settings", href="/settings", id="tab-4-link"),
+                    ],
+                    vertical=True,
+                    pills=True,
+                    className="sidebar"
+                ),
+                id="sidebar",
+                is_open=True,
             )
-        ], width={"size": 2, "offset": 0}),  # Width of the sidebar
+        ], width={"size": 2, "offset": 0}, id="sidebar-col", className="sidebar-col"),
         dbc.Col([
             dcc.Location(id='url', refresh=False),
-            html.Div(id='tab-content', className="main-content")  # Add the class name here
-        ], width=10)  # Width of the main content
+            html.Div(id='tab-content', className="main-content")
+        ], id="main-content-col", width=10)
     ])
-], fluid=True)
+], fluid=True, className="app-container")
+
+
+
+
+@app.callback(
+    [Output("sidebar", "is_open"),
+     Output("sidebar-col", "width"),
+     Output("main-content-col", "width"),
+     Output("toggle-button", "children"),
+     Output("sidebar-logo", "style"),
+     Output("sidebar-state", "data")],
+    [Input("toggle-button", "n_clicks")],
+    [State("sidebar-state", "data")]
+)
+def toggle_sidebar(n, sidebar_state):
+    if n:
+        is_open = not sidebar_state['is_open']
+        sidebar_state['is_open'] = is_open
+        sidebar_width = 2 if is_open else 0
+        main_content_width = 10 if is_open else 12
+        button_text = "☰" if is_open else "☰"
+        logo_style = {'width': '100%', 'height': 'auto'} if is_open else {'display': 'none'}
+        return is_open, {"size": sidebar_width, "offset": 0}, main_content_width, button_text, logo_style, sidebar_state
+    return sidebar_state['is_open'], {"size": 2, "offset": 0}, 10, "☰", {'width': '100%', 'height': 'auto'}, sidebar_state
+
 
 
 ### Manage Tab Selections
@@ -503,7 +558,7 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
 
             grouped_changes = {}
             for change in changes:
-                row_index = change['row_index']
+                row_index = change['rowIndex']
                 if row_index not in grouped_changes:
                     grouped_changes[row_index] = change.copy()
                 else:
@@ -544,6 +599,7 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
                         update_query = text("""
                             UPDATE app_tag_policies
                             SET tag_policy_name = :tag_policy_name,
+                                tag_policy_description = :tag_policy_description,
                                 tag_key = :tag_key,
                                 tag_value = :tag_value,
                                 update_timestamp = NOW()
@@ -551,6 +607,7 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
                         """)
                         connection.execute(update_query, parameters={
                             'tag_policy_name': change['tag_policy_name'],
+                            'tag_policy_description': change['tag_policy_description'],
                             'tag_key': change['tag_key'],
                             'tag_value': change['tag_value'],
                             'tag_policy_id': record_id
@@ -560,14 +617,15 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
                         if not change.get('tag_policy_name') or not change.get('tag_key'):
                             raise ValueError("Missing required fields: 'tag_policy_name' or 'tag_key'")
 
-                        insert_params = {k: v for k, v in change.items() if k in ['tag_policy_name', 'tag_key', 'tag_value']}
+                        insert_params = {k: v for k, v in change.items() if k in ['tag_policy_name', 'tag_policy_description', 'tag_key', 'tag_value']}
                         print(f"INSERT PARAMS: {insert_params}")  # Debug statement
 
                         insert_query = text("""
-                            INSERT INTO app_tag_policies (tag_policy_name, tag_key, tag_value, update_timestamp)
-                            VALUES (:tag_policy_name, :tag_key, :tag_value, NOW())
+                            INSERT INTO app_tag_policies (tag_policy_name, tag_policy_description, tag_key, tag_value, update_timestamp)
+                            VALUES (:tag_policy_name, :tag_policy_description, :tag_key, :tag_value, NOW())
                         """)
                         connection.execute(insert_query, parameters= {'tag_policy_name':insert_params['tag_policy_name'],
+                                                                      'tag_policy_description':insert_params['tag_policy_description'],
                                         'tag_key':insert_params['tag_key'],
                                         'tag_value': insert_params['tag_value']})
 
@@ -607,7 +665,7 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
         change_data = cell_change[0]['data']
         row_index = cell_change[0]['rowIndex']
         # Ensure the change data includes the row index
-        change_data['row_index'] = row_index
+        change_data['rowIndex'] = row_index
         changes.append(change_data)
         row_data = mark_changed_rows(row_data, changes)
         return changes, row_data, {'display': 'block', 'color': 'yellow', 'font-weight': 'bold'}, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update

@@ -4,6 +4,47 @@
     color: #002147;
     min-height: 100vh;  /* Full height */
     padding: 0px;
+    min-height: 100vh;  /* Full height */
+    height: 100vh;  /* Full height */
+    position: -webkit-sticky; /* For Safari */
+    position: sticky;
+    top: 0;
+    overflow-y: auto; /* Ensures scrollbar appears if content overflows */
+    transition: all 0.1s;
+    padding: 0px;
+}
+
+html, body, .app-container {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+.full-height-row {
+    height: 100vh;
+}
+
+.sidebar-col {
+    transition: all 0.1s;
+    background-color: #002147;
+    padding: 0px;
+}
+
+.main-content-col {
+    transition: all 0.1s;
+    height: 100vh;  /* Ensure it matches the height of the viewport */
+}
+
+.app-container {
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+}
+
+.sidebar.collapsed {
+    flex: 0 0 0;
+    max-width: 0;
+    padding: 0;
 }
 
 /* NavLink adjustments for full rectangle highlight */
@@ -27,6 +68,7 @@
     padding: 5px;
     margin-top: 2px;
     border: 2px solid #002147;  /* Dark navy blue */
+    transition: all 0.8s;
 }
 
 .prettier-button {

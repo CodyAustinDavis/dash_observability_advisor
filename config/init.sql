@@ -39,6 +39,7 @@ SELECT
   c.tags AS cluster_tags,
   c.cluster_source
 FROM system.compute.clusters c
+QUALIFY (ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY change_time DESC) = 1)
 ),
  
 px_all AS (
