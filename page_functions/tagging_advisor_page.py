@@ -68,6 +68,11 @@ DEFAULT_TOP_N = 100
 system_query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token, catalog= catalog, schema = schema)
 system_engine = system_query_manager.get_engine()
 
+#### Run init SQL script to make sure all required tables are created
+sql_init_filepath = './config/init.sql'  # Ensure the path is correct
+execute_sql_from_file(system_engine, sql_init_filepath)
+
+
 ## Create all init tables that this app needs to exists - We use SQL Alchemy models so we can more easily programmatically write back
 Base.metadata.create_all(system_engine, checkfirst=True)
 
@@ -140,10 +145,6 @@ def get_compute_tagged_grid_data():
     finally:
         session.close()
     return df #.to_dict('records')
-
-#### Run init SQL script to make sure all required tables are created
-sql_init_filepath = './config/init.sql'  # Ensure the path is correct
-execute_sql_from_file(system_engine, sql_init_filepath)
 
 
 ##### Load Parameter Filters

@@ -1,4 +1,4 @@
-
+CREATE SCHEMA IF NOT EXISTS main.dash_observability_advisor;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS clean_usage
 TBLPROPERTIES('pipelines.autoOptimize.zOrderCols' = 'usage_start_time,billing_origin_product')
