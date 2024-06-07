@@ -41,6 +41,11 @@ final_parsed_query AS (
     *,
     -- TO DO: Add Discounts Table Later
     ((1-COALESCE(NULL, 0))*sku_price)*usage_quantity AS Dollar_DBUs,
+    -- Combine system tags with App tags
+    map_zip_with(
+      u.clean_tags,
+      COALESCE(ct.user_tags, map()),(k, v1, v2) -> CASE WHEN length(v2) > 1 THEN v2 ELSE v1 END
+    ) AS updated_tags,
     -- Get Total Keys Required
     -- Now tag combos can be matched in 2 separate ways: key only, or the key=value pair if optionall provided
     (
@@ -55,7 +60,7 @@ final_parsed_query AS (
         CONCAT(
           --- Key Only Intersection
           array_intersect(
-            map_keys(u.clean_tags),
+            map_keys(updated_tags),
             (
               SELECT
                 MAX(KeyOnlyPolicies)
@@ -67,8 +72,8 @@ final_parsed_query AS (
           -- Key + Value Intersection
           array_intersect(
             TRANSFORM(
-              MAP_KEYS(clean_tags),
-              key -> CONCAT(key, '=', clean_tags [key])
+              MAP_KEYS(updated_tags),
+              key -> CONCAT(key, '=', updated_tags [key])
             ),
             (
               SELECT
@@ -80,6 +85,7 @@ final_parsed_query AS (
         )
       )
     ) AS MatchingTagKeys,
+
     array_except(
       (
              (
@@ -89,7 +95,7 @@ final_parsed_query AS (
                 parsed_keys_all
             )
       ),
-      map_keys(u.clean_tags)
+      map_keys(updated_tags)
     ) AS MissingTagKeys,
     size(MatchingTagKeys) AS NumberOfMatchedKeys,
     array_join(MatchingTagKeys, '_') AS TagPolicyKeys,
@@ -97,7 +103,7 @@ final_parsed_query AS (
       CONCAT(
         transform(
           MatchingTagKeys,
-          key -> CONCAT(key, '=', u.clean_tags [key])
+          key -> CONCAT(key, '=', updated_tags [key])
         ),
         -- Get Compliant keys without value pair
         FILTER(MatchingTagKeys, x -> POSITION('=' IN x) > 0) -- Pull out the compliant values with the key pair
@@ -112,4 +118,11 @@ final_parsed_query AS (
   FROM
     clean_usage AS u
   INNER JOIN px_all AS px ON px.sku_name = u.sku_name
+  --- Join up tags persisted from the app
+  LEFT JOIN (SELECT *, map(tag_key, tag_value) AS user_tags FROM app_compute_tags WHERE tag_key IS NOT NULL) ct ON 
+      (ct.compute_asset_id = u.clean_cluster_id AND u.billing_origin_product = ct.compute_asset_type)
+      OR 
+      (ct.compute_asset_id = u.clean_job_or_pipeline_id AND u.billing_origin_product = ct.compute_asset_type)
+      OR 
+      (ct.compute_asset_id = u.clean_warehouse_id AND u.billing_origin_product = ct.compute_asset_type)
 )

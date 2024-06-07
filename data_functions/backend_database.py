@@ -128,7 +128,7 @@ class QueryManager:
     @contextmanager
     def session_scope(engine):
         """Provide a transactional scope around a series of operations."""
-        session = sessionmaker(bind=engine)()
+        session = sessionmaker(bind=engine, expire_on_commit=True)()
         try:
             yield session
             session.commit()
@@ -208,6 +208,199 @@ def execute_sql_from_file(engine, filepath):
 
 
 
+
+
+##### Load Dynamic SQL Files for TAG_QUERY
+def build_tag_query_from_params(
+                                start_date, end_date, 
+                                tag_filter = None,
+                                product_category = None, 
+                                tag_policies = None, tag_keys = None, tag_values = None, 
+                                final_agg_query=None):
+    
+    ## Load Base Query Template Parts
+    TAG_QUERY_1 = read_sql_file("./config/tagging_advisor/base_tag_query_1.sql") ## Where you add selected tags
+    TAG_QUERY_2 = read_sql_file("./config/tagging_advisor/base_tag_query_2.sql")
+    TAG_QUERY_3 = read_sql_file("./config/tagging_advisor/base_tag_query_3.sql") ## Where you filter the rest of the paramters
+    TAG_QUERY_4 = read_sql_file("./config/tagging_advisor/base_tag_query_4.sql") ## Where you select the final data frame
+
+
+    FINAL_QUERY = ""
+
+    ## Tag Dynamic Filter Construction
+    if tag_policies:
+
+        tag_policies_str = ', '.join([f"'{key}'" for key in tag_policies]) 
+        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_policy_name IN ({tag_policies_str})"
+    
+    if tag_keys:
+        tag_keys_str = ', '.join([f"'{key}'" for key in tag_keys]) 
+        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_key IN ({tag_keys_str})"
+    
+    if tag_values:
+        tag_values_str = ', '.join([f"'{key}'" for key in tag_values]) 
+        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_value IN ({tag_values_str})"
+
+    FINAL_QUERY = FINAL_QUERY + "\n" + TAG_QUERY_1 + "\n" + TAG_QUERY_2
+    ## 
+    FINAL_QUERY = FINAL_QUERY + TAG_QUERY_3 + f"\n AND usage_start_time >= '{start_date}'::timestamp \n AND usage_start_time <= '{end_date}'::timestamp"
+
+
+    if product_category:
+        product_categories_str = ', '.join([f"'{key}'" for key in product_category]) 
+        FINAL_QUERY = FINAL_QUERY + f"\n AND billing_origin_product IN ({product_categories_str})"
+
+    if tag_filter == 'Matched':
+        FINAL_QUERY = FINAL_QUERY + f"\n AND IsTaggingMatch = 'In Policy' "
+    elif tag_filter == 'Not Matched':
+        FINAL_QUERY = FINAL_QUERY + f"\n AND IsTaggingMatch = 'Not Matched To Tag Policy' "
+    else: 
+        pass
+    
+    ## Final Select Statement -- this is after all the standard server-side filtering
+
+    if final_agg_query:
+        FINAL_QUERY = FINAL_QUERY + ")\n" + final_agg_query
+    
+    else:
+        FINAL_QUERY = FINAL_QUERY + TAG_QUERY_4
+
+    return FINAL_QUERY
+
+
+
+# Adhoc AG Grid
+def build_adhoc_ag_grid_from_params(
+                                start_date, end_date, tag_filter = None,
+                                tag_policies = None, tag_keys = None, tag_values = None, 
+                                final_agg_query=None, top_n = None):
+    
+    ## Load Base Query Template Parts
+    BASE_AGG_QUERY = """
+                    SELECT 
+                    clean_cluster_id AS cluster_id,
+                    MAX(cluster_name) AS cluster_name,
+                    MIN(IsTaggingMatch) AS is_tag_policy_match,
+                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
+                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    MAX(billing_origin_product) AS product_type,
+                    MAX(workspace_id) AS workspace_id,
+                    MAX(account_id) AS account_id,
+                    last_value(clean_tags) AS tags,
+                    MAX(clean_usage_owner) AS resource_owner,
+                    round(SUM(usage_quantity), 2) AS usage_quantity,
+                    round(SUM(Dollar_DBUs_List), 2) AS Dollar_DBUs_List,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 7  THEN Dollar_DBUs_List END), 2) AS T7_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 30  THEN Dollar_DBUs_List END), 2) AS T30_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 90  THEN Dollar_DBUs_List END), 2) AS T90_Usage,
+                    MIN(usage_date) AS first_usage_date,
+                    MAX(usage_date) AS latest_usage_date,
+                    date_diff(DAY, first_usage_date , getdate()) AS resource_age,
+                    date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
+                    FROM filtered_result
+                    WHERE 1=1 
+                    AND billing_origin_product IN ('ALL_PURPOSE')
+                    GROUP BY clean_cluster_id
+                    ORDER BY Dollar_DBUs_List DESC
+                    """
+
+    if top_n:
+        top_n = int(top_n)
+        BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
+
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    
+    return FINAL_QUERY
+
+
+#### SQL AG Grid
+def build_sql_ag_grid_from_params(
+                                start_date, end_date, tag_filter = None,
+                                tag_policies = None, tag_keys = None, tag_values = None, 
+                                final_agg_query=None, top_n = None):
+    
+    ## Load Base Query Template Parts
+    BASE_AGG_QUERY = """
+                    SELECT 
+                    clean_warehouse_id AS warehouse_id,
+                    MIN(IsTaggingMatch) AS is_tag_policy_match,
+                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
+                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    MAX(billing_origin_product) AS product_type,
+                    MAX(workspace_id) AS workspace_id,
+                    MAX(account_id) AS account_id,
+                    last_value(clean_tags) AS tags,
+                    MAX(clean_usage_owner) AS resource_owner,
+                    round(SUM(usage_quantity), 2) AS usage_quantity,
+                    round(SUM(Dollar_DBUs_List), 2) AS Dollar_DBUs_List,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 7  THEN Dollar_DBUs_List END), 2) AS T7_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 30  THEN Dollar_DBUs_List END), 2) AS T30_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 90  THEN Dollar_DBUs_List END), 2) AS T90_Usage,
+                    MIN(usage_date) AS first_usage_date,
+                    MAX(usage_date) AS latest_usage_date,
+                    date_diff(DAY, first_usage_date , getdate()) AS resource_age,
+                    date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
+                    FROM filtered_result
+                    WHERE 1=1 
+                    AND billing_origin_product IN ('SQL')
+                    AND clean_warehouse_id IS NOT NULL
+                    GROUP BY clean_warehouse_id
+                    ORDER BY Dollar_DBUs_List DESC
+                    """
+
+    if top_n:
+        top_n = int(top_n)
+        BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
+
+
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    
+    return FINAL_QUERY
+
+
+#### JOBS AG Grid
+def build_jobs_ag_grid_from_params(
+                                start_date, end_date, tag_filter = None,
+                                tag_policies = None, tag_keys = None, tag_values = None, 
+                                final_agg_query=None, top_n = None):
+    
+    ## Load Base Query Template Parts
+    BASE_AGG_QUERY = """
+                    SELECT 
+                    clean_job_or_pipeline_id AS job_id,
+                    MAX(cluster_name) AS cluster_name,
+                    MIN(IsTaggingMatch) AS is_tag_policy_match,
+                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
+                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    MAX(billing_origin_product) AS product_type,
+                    MAX(workspace_id) AS workspace_id,
+                    MAX(account_id) AS account_id,
+                    last_value(clean_tags) AS tags,
+                    MAX(clean_usage_owner) AS resource_owner,
+                    round(SUM(usage_quantity), 2) AS usage_quantity,
+                    round(SUM(Dollar_DBUs_List), 2) AS Dollar_DBUs_List,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 7  THEN Dollar_DBUs_List END), 2) AS T7_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 30  THEN Dollar_DBUs_List END), 2) AS T30_Usage,
+                    round(SUM(CASE WHEN date_diff(DAY, usage_date, getdate()) <= 90  THEN Dollar_DBUs_List END), 2) AS T90_Usage,
+                    MIN(usage_date) AS first_usage_date,
+                    MAX(usage_date) AS latest_usage_date,
+                    date_diff(DAY, first_usage_date , getdate()) AS resource_age,
+                    date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
+                    FROM filtered_result
+                    WHERE 1=1 
+                    AND billing_origin_product IN ('JOBS')
+                    AND clean_job_or_pipeline_id IS NOT NULL
+                    GROUP BY clean_job_or_pipeline_id
+                    ORDER BY Dollar_DBUs_List DESC
+                    """
+
+    if top_n:
+        top_n = int(top_n)
+        BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
+
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    return FINAL_QUERY
+
 ##### Initial Data Model of App - this tables must exist for app to run so they are deployed and checked on start-up
 
 ## Define DDL Tables to implement on start-up
@@ -224,6 +417,7 @@ class AppComputeTags(Base):
     tag_id = Column(BigInteger, Identity(always=True), primary_key=True)
     compute_asset_id = Column(String, nullable = False)
     compute_asset_type = Column(String, nullable = False)
+    tag_policy_name = Column(String, nullable = False)
     tag_key = Column(String, nullable = False)
     tag_value = Column(String)
     tag_policy_name = Column(String)

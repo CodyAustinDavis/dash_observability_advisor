@@ -5,6 +5,10 @@ import pandas as pd
 import os
 import dash_ag_grid as dag
 from datetime import date, datetime, timedelta
+from chart_functions import ChartFormats
+from visual_functions import (
+    get_adhoc_ag_grid_column_defs
+)
 from data_functions.backend_database import (
     QueryManager, 
     Base,
@@ -19,7 +23,11 @@ from data_functions.backend_database import (
     get_cluster_id_category_filter,
     get_job_id_category_filter,
     read_sql_file,
-    execute_sql_from_file
+    execute_sql_from_file,
+    build_tag_query_from_params,
+    build_adhoc_ag_grid_from_params,
+    build_jobs_ag_grid_from_params,
+    build_sql_ag_grid_from_params
 )
 import logging
 from dotenv import load_dotenv
@@ -49,6 +57,8 @@ access_token = os.getenv("DATABRICKS_TOKEN")
 catalog = os.getenv("DATABRICKS_CATALOG")
 schema = os.getenv("DATABRICKS_SCHEMA")
 
+DEFAULT_TOP_N = 100
+
 ##### Load Init Scripts for Data Tagging Advisor
 
 ## Run init scripts on app start-up
@@ -63,6 +73,7 @@ Base.metadata.create_all(system_engine, checkfirst=True)
 
 #### Get Tables to Manage and Write To
 TagPoliciesAGGRid = system_query_manager.reflect_table('app_tag_policies')
+ComputeTaggedPoliciesAGGrid = system_query_manager.reflect_table('app_compute_tags')
 
 
 #### For the Reflection / AG Grid updates
@@ -75,6 +86,60 @@ def get_tag_policies_grid_data():
         session.close()
     return df #.to_dict('records')
 
+
+#### Get Adhoc Usage AG Grid Data
+def get_adhoc_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
+
+    query = build_adhoc_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter= tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
+    session = system_query_manager.get_new_session()
+    try:
+
+        df = pd.read_sql(text(query), session.bind)
+        ## Need to ad a row index to track changes since this result does not have a clear primary key
+        df['rowIndex'] = df.index
+
+    finally:
+        session.close()
+    return df #.to_dict('records')
+
+
+#### Get Jobs Usage AG Grid Data
+def get_jobs_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
+
+    query = build_jobs_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
+    session = system_query_manager.get_new_session()
+    try:
+
+        df = pd.read_sql(text(query), session.bind)
+        df['rowIndex'] = df.index
+    finally:
+        session.close()
+    return df #.to_dict('records')
+
+#### Get SQL Usage AG Grid Data
+def get_sql_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
+
+    query = build_sql_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
+    session = system_query_manager.get_new_session()
+    try:
+
+        df = pd.read_sql(text(query), session.bind)
+        df['rowIndex'] = df.index
+    finally:
+        session.close()
+    return df #.to_dict('records')
+
+
+##### Get Compute Tagged Table
+def get_compute_tagged_grid_data():
+    session = system_query_manager.get_new_session()
+    try:
+        query = session.query(ComputeTaggedPoliciesAGGrid)
+        df = pd.read_sql(query.statement, session.bind)
+        df['rowIndex'] = df.index
+    finally:
+        session.close()
+    return df #.to_dict('records')
 
 #### Run init SQL script to make sure all required tables are created
 sql_init_filepath = './config/init.sql'  # Ensure the path is correct
@@ -102,9 +167,6 @@ day_30_rolling_filter = date_30_days_ago.date()
 df_product_cat_filter = get_product_category_filter_tuples(system_engine)
 df_cluster_id_filter = get_cluster_id_category_filter(system_engine)
 df_job_id_filter = get_job_id_category_filter(system_engine)
-#df_tag_policy_filter = get_tag_policy_name_filter(system_engine)
-#df_tag_key_filter = get_tag_policy_key_filter(system_engine)
-#df_tag_value_filter = get_tag_policy_value_filter(system_engine)
 
 # Fetch distinct tag policy names within the context manager
 
@@ -112,12 +174,15 @@ df_job_id_filter = get_job_id_category_filter(system_engine)
 with QueryManager.session_scope(system_engine) as session:
 
     distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
-    distinct_tag_keys = pd.read_sql(session.query(TagPolicies.tag_key).distinct().statement, con=system_engine)
+    distinct_tag_keys = pd.read_sql(text("""
+                                    SELECT tag_key FROM main.dash_observability_advisor.app_tag_policies
+                                    QUALIFY ROW_NUMBER() OVER (PARTITION BY tag_key ORDER BY update_timestamp DESC) = 1"""), con=system_engine)
     distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
 
     tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
     tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
     tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
+
 
 
 #### Tagging Advisor Page Function
@@ -166,7 +231,7 @@ def render_tagging_advisor_page():
                     ])
                 ], width=2),
                 dbc.Col([
-                    html.Button('Update Parameters', id='update-params-button', n_clicks=0, className = 'prettier-button'),  # A specific shade of blue
+                    html.Button('Refresh', id='update-params-button', n_clicks=0, className = 'prettier-button'),  # A specific shade of blue
                 ], width=2)
             ]),
             html.Div(className='border-top'),
@@ -354,11 +419,12 @@ def render_tagging_advisor_page():
             ], id='output-data')
         ]
         ),
+
         html.Div(className='border-top'),
         html.Div([
             dbc.Row([
                 dbc.Col([
-                    html.H3("Tag Audit Management", style={'color': '#002147'}),  # A specific shade of blue
+                    html.H2("Tag Audit Management", style={'color': '#002147'}),  # A specific shade of blue
                 ], width=12)
             ]),
             html.Div(className='border-top'),
@@ -366,14 +432,15 @@ def render_tagging_advisor_page():
                     dbc.Col([
                     html.P("This section allows users to create & manage tagging policies, find clusters/warehouses as well as jobs that are not properly tagged into the policies. \n Once these entities are found, they can then be properly categorized and tagging in the app.", style={'color': '#002147'}),  # A specific shade of blue
                 ], width=12)
-            ]),
+            ])
+        ], style={'margin-left':'10px', 'margin-right':'10px'}),
 
-            ### AG Grids!
-            ## When "Save Policy Change is pushed, callback must update filter selections as well as the UI for the Grid
-            ## The callback must also show a ! logo when there are unsaved changes
-            ## The logo then needs to clear the Store when changed are saved and reloaded
-            dbc.Row([
-                    dbc.Col([
+        ### AG Grids!
+        ## When "Save Policy Change is pushed, callback must update filter selections as well as the UI for the Grid
+        ## The callback must also show a ! logo when there are unsaved changes
+        ## The logo then needs to clear the Store when changed are saved and reloaded
+        dbc.Row([
+                dbc.Col([
                     html.Div([
                         dbc.Row([
                             dbc.Col([
@@ -383,7 +450,7 @@ def render_tagging_advisor_page():
                                     color= '#002147', 
                                     children=html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
-                            ], width=4),
+                            ], width=3),
                             dbc.Col([
                                 dcc.Loading(
                                     id="loading-clear-policies",
@@ -391,83 +458,469 @@ def render_tagging_advisor_page():
                                     color= '#002147',
                                     children=html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
-                            ], width=4),
+                            ], width=3),
+                                        # Spacer column to push the last two columns to the right
+                            dbc.Col(
+                                width={"size": 4}
+                            ),
                             dbc.Col([
                                 dcc.Loading(
                                     id="loading-add-policies",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147',
-                                    children=html.Button('Add +', id='add-policy-row-btn', n_clicks=0, style={'margin-bottom': '10px', 'font-size': '14px'},
-                                    className = 'add-button')
+                                    children=html.Button('+', id='add-policy-row-btn', n_clicks=0,
+                                    className = 'agedit-button')
                                 )
-                            ], width=2),
+                            ], width=1),
                              dbc.Col([
                                 dcc.Loading(
                                     id="loading-remove-policies",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147',
-                                    children=html.Button('Remove -', id='remove-policy-row-btn', n_clicks=0, style={'margin-bottom': '10px', 'font-size': '14px'}, className = 'remove-button')
+                                    children=html.Button('-', id='remove-policy-row-btn', n_clicks=0, className = 'agedit-button')
                                 )
-                            ], width=2)
+                            ], width=1)
                         ]),
                         html.Div(id='policy-change-indicator', children=[
                                 html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
-                            ], style={'display': 'none'}),
-                        ## DEGBUG -- html.Div(id='changes-display'),  # This Div will show the changes
-                            dag.AgGrid(
-                                id='tag-policy-ag-grid',
+                            ], style={'display': 'none', 'margin-left':'10px', 'margin-right':'10px'}),
+                    ## DEGBUG -- html.Div(id='changes-display'),  # This Div will show the changes
+                            
+                    dag.AgGrid(
+                    id='tag-policy-ag-grid',
 
 
-                                columnDefs=[
-                                    {
-                                        'headerName': 'Policy Id', 
-                                        'field': 'tag_policy_id', 
-                                        'editable': False, 
-                                        'width': 100, 
-                                        'suppressSizeToFit': True
-                                    },
-                                    {
-                                        'headerName': 'Policy Name', 
-                                        'field': 'tag_policy_name', 
-                                        'editable': True,
-                                        'suppressSizeToFit': True
-                                    },
-                                    {
-                                        'headerName': 'Policy Description', 
-                                        'field': 'tag_policy_description', 
-                                        'editable': True,
-                                        'suppressSizeToFit': True
-                                    },
-                                    {
-                                        'headerName': 'Tag Key', 
-                                        'field': 'tag_key', 
-                                        'width': 150, 
-                                        'editable': True,
-                                        'suppressSizeToFit': True
-                                    },
-                                    {
-                                        'headerName': 'Tag Value', 
-                                        'field': 'tag_value', 
-                                        'editable': True,
-                                        'width': 150, 
-                                        'enableCellChangeFlash': True,
-                                        'suppressSizeToFit': True
-                                    },
-                                    {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 
-                                    'suppressSizeToFit': True},
-                                ],
-                                defaultColDef=defaultColDef,
-                                rowData=get_tag_policies_grid_data().to_dict('records'),
-                                dashGridOptions={
-                                    'enableRangeSelection': True,
-                                    'rowSelection': 'multiple'
-                                    }
+                            columnDefs=[
+                                {
+                                    'headerName': 'Policy Id', 
+                                    'field': 'tag_policy_id', 
+                                    'editable': False, 
+                                    'width': 100, 
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Policy Name', 
+                                    'field': 'tag_policy_name', 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Policy Description', 
+                                    'field': 'tag_policy_description', 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Tag Key', 
+                                    'field': 'tag_key', 
+                                    'width': 150, 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Tag Value', 
+                                    'field': 'tag_value', 
+                                    'editable': True,
+                                    'width': 150, 
+                                    'enableCellChangeFlash': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 
+                                'suppressSizeToFit': True},
+                            ],
+                            defaultColDef=defaultColDef,
+                            rowData=get_tag_policies_grid_data().to_dict('records'),
+                            dashGridOptions={
+                                'enableRangeSelection': True,
+                                'rowSelection': 'multiple'
+                                }
+                        ),
+                        dcc.Store(id='policy-changes-store')
+                    ])
+                    ], width=5, style={'margin-left':'10px', 'margin-right':'10px'}),
+
+            ## AG Grid for active cluster / compute tags
+                dbc.Col([
+                    html.Div([
+                        dbc.Row([
+                            dbc.Col([
+                                    dcc.Loading(
+                                    id="loading-save-compute-tags",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147', 
+                                    children=html.Button('Save Tag Changes', id='tag-compute-tags-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                )
+                            ], width=3),
+                            dbc.Col([
+                                dcc.Loading(
+                                    id="loading-clear-compute-tags",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Clear Tag Changes', id='tag-compute-tags-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                )
+                            ], width=3),
+                                        # Spacer to push the last two columns to the right
+                            dbc.Col(
+                                width={"size": 4}
                             ),
-                            dcc.Store(id='policy-changes-store')
-                        ])
-                ], width=5, style={'margin-left':'10px', 'margin-right':'10px'})
-            ])
+                            dbc.Col([
+                                dcc.Loading(
+                                    id="loading-add-compute-tags",
+                                    type="default",  # Choose the style of the loading animation
+                                    children=html.Button('+', id='add-compute-tag-row-btn', n_clicks=0,
+                                    className = 'agedit-button')
+                                )
+                            ], width=1),
+                             dbc.Col([
+                                dcc.Loading(
+                                    id="loading-remove-compute-tags",
+                                    type="default",  # Choose the style of the loading animation
+                                    children=html.Button('-', id='remove-compute-tags-row-btn', n_clicks=0,
+                                    className = 'agedit-button')
+                                )
+                            ], width=1)
+                        ]),
+                        html.Div(id='compute-tag-change-indicator', children=[
+                                html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
+                            ], style={'display': 'none', 'margin-left':'10px', 'margin-right':'10px'}),
+                dag.AgGrid(
+                    id='tag-compute-ag-grid',
+                    columnDefs=[
+                                {
+                                    'headerName': 'Tag Id', 
+                                    'field': 'tag_id', 
+                                    'editable': False, 
+                                    'width': 100, 
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Compute Id', 
+                                    'field': 'compute_asset_id', 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Compute Type', 
+                                    'field': 'compute_asset_type', 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Tag Policy', 
+                                    'field': 'tag_policy_name', 
+                                    'width': 150, 
+                                    'editable': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Tag Key', 
+                                    'field': 'tag_key', 
+                                    'editable': True,
+                                    'width': 150, 
+                                    'enableCellChangeFlash': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Tag Value', 
+                                    'field': 'tag_value', 
+                                    'editable': True,
+                                    'width': 150, 
+                                    'enableCellChangeFlash': True,
+                                    'suppressSizeToFit': True
+                                },
+                                {
+                                    'headerName': 'Is Persisted To Asset?', 
+                                    'field': 'is_persisted_to_actual_asset', 
+                                    'editable': True,
+                                    'width': 80, 
+                                    'enableCellChangeFlash': True,
+                                    'suppressSizeToFit': True
+                                },
+
+                                {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 
+                                'suppressSizeToFit': True},
+                            ],
+                            defaultColDef=defaultColDef,
+                            rowData= get_compute_tagged_grid_data().to_dict('records'),
+                            dashGridOptions={
+                                'enableRangeSelection': True,
+                                'rowSelection': 'multiple'
+                                }
+                        ),
+                        dcc.Store(id='cluster-tag-rowData-store', data=get_compute_tagged_grid_data().to_dict('records')),
+                        dcc.Store(id='cluster-tag-changes-store', data=get_compute_tagged_grid_data().to_dict('records'))
+                    ])
+            ], width=6, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
         ]),
+        
+        ## DBC AG Grid Row 2,
+        ### AG Grid for tagging adhoc usage
+        ### Entirely New Row
+        html.Div(className='border-top'),
+        html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H3("Adhoc Cluster Usage & Tags", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ]),
+                    html.Div(className='border-top'),
+                    dbc.Row([
+                            dbc.Col([
+                            html.P("Tag Adhoc Clusters By Usage", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ])
+        ]),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-save-adhoc-usage",
+                                type="default",
+                                color= '#002147', 
+                                children=html.Button('Save Changes', id='usage-adhoc-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-clear-adhoc-usage",
+                                type="default",
+                                color= '#002147', 
+                                children=html.Button('Clear Changes', id='usage-adhoc-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col(
+                                width={"size": 6}
+                            ),
+                        dbc.Col([
+                            html.P("Top N By Usage:", style={'color': '#002147', 'margin-bottom': '10px'}),
+                            dcc.Input(
+                                id='top-n-adhoc',
+                                type='number',  # Set the input type to 'number'
+                                placeholder='Top N Adhoc Clusters By Usage',
+                                value = DEFAULT_TOP_N,
+                                step=1,  # Step value to ensure only integers can be entered
+                                debounce=True  # Wait for the user to finish typing before triggering the callback
+                            ),
+                        ], width=2, style={'margin-bottom': '10px'})
+                    ]),
+                    html.Div(id='usage-adhoc-change-indicator', children=[
+                        html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
+                    ], style={'display': 'none'}),
+
+                    dag.AgGrid(
+                        id='adhoc-usage-ag-grid',
+                        columnDefs=get_adhoc_ag_grid_column_defs(tag_key_filter),
+                        defaultColDef=defaultColDef,
+                        columnSize="sizeToFit",
+                        rowData = get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
+                    ),
+                    dcc.Store(id='adhoc-ag-grid-store'),
+                    dcc.Store(id='adhoc-ag-grid-original-data', data = get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                    dcc.Store(id='tag-keys-store', data=tag_key_filter)
+                ])
+            ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
+        ]),
+        ###### END Adhoc Usage Grid
+
+        ## DBC AG Grid Row 2,
+        ### AG Grid for tagging JOBS usage
+        html.Div(className='border-top'),
+
+        html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H3("Jobs Usage & Tags", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ]),
+                    html.Div(className='border-top'),
+
+                    dbc.Row([
+                            dbc.Col([
+                            html.P("Tag Jobs By Usage", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ])
+        ]),
+
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-save-jobs-usage",
+                                type="default",
+                                color= '#002147', 
+                                children=html.Button('Save Changes', id='usage-jobs-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-clear-jobs-usage",
+                                type="default",
+                                color= '#002147',
+                                children=html.Button('Clear Changes', id='usage-jobs-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col(
+                                width={"size": 6}
+                            ),
+                        dbc.Col([
+                            html.P("Top N By Usage:", style={'color': '#002147', 'margin-bottom': '10px'}),
+                            dcc.Input(
+                                id='top-n-jobs',
+                                type='number',  # Set the input type to 'number'
+                                placeholder='Top N Jobs Clusters By Usage',
+                                value = DEFAULT_TOP_N,
+                                step=1,  # Step value to ensure only integers can be entered
+                                debounce=True  # Wait for the user to finish typing before triggering the callback
+                            ),
+                        ], width=2, style={'margin-bottom': '10px'})
+                    ]),
+
+                    html.Div(id='usage-jobs-change-indicator', children=[
+                        html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
+                    ], style={'display': 'none'}),
+
+                    dag.AgGrid(
+                        id='jobs-usage-ag-grid',
+                        columnDefs=[
+                            {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 'suppressSizeToFit': True},
+                            {'headerName': 'Job Id', 'field': 'job_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True},
+                            {'headerName': 'Policy Status', 'field': 'is_tag_policy_match', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Missing Policy Tags', 'field': 'missing_tags', 'editable': True, 'suppressSizeToFit': True},
+                            {'headerName': 'Tags', 'field': 'tags', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Add Policy Key', 'field': 'input_policy_key', 'editable': True, 'cellStyle': {'backgroundColor': 'rgba(111, 171, 208, 0.9)'}, 'suppressSizeToFit': True},
+                            # 'cellEditor': 'agSelectCellEditor', 'cellEditorParams': {'values': [option.get('value') for option in tag_keys]}},
+                            {'headerName': 'Add Policy Value', 'field': 'input_policy_value', 'editable': True, 'cellStyle': {'backgroundColor': 'rgba(111, 171, 208, 0.9)'},'suppressSizeToFit': True},
+                            {'headerName': 'Usage Amount', 'field': 'Dollar_DBUs_List', 'editable': False, 'suppressSizeToFit': True,
+                                    'cellRenderer': 'BarGuage', 'guageColor': 'rgba(111, 171, 208, 0.7)'},
+                            {'headerName': 'T7 Usage', 'field': 'T7_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'T30 Usage', 'field': 'T30_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'T90 Usage', 'field': 'T90_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'Resource Age', 'field': 'resource_age', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'HeatMap'},
+                            {'headerName': 'Days Since Last Use', 'field': 'days_since_last_use', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'HeatMap'},
+                            {'headerName': 'First Usage Date', 'field': 'first_usage_date', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Latest Usage Date', 'field': 'latest_usage_date', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Product Type', 'field': 'product_type', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Workspace ID', 'field': 'workspace_id', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Account ID', 'field': 'account_id', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Resource Owner', 'field': 'resource_owner', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Usage Quantity', 'field': 'usage_quantity', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Cluster Name', 'field': 'cluster_name', 'editable': False, 'suppressSizeToFit': True}
+                        ],
+                        defaultColDef=defaultColDef,
+                        columnSize="sizeToFit",
+                        rowData = get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
+                    ),
+                    dcc.Store(id='jobs-ag-grid-store'),
+                    dcc.Store(id='jobs-ag-grid-original-data', data = get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                ])
+            ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
+        ]),
+
+        ###### END JOBS Usage Grid
+         ## DBC AG Grid Row 2,
+        ### AG Grid for tagging JOBS usage
+        html.Div(className='border-top'),
+        html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H3("SQL Warehouse Usage & Tags", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ]),
+                    html.Div(className='border-top'),
+                    dbc.Row([
+                            dbc.Col([
+                            html.P("Tag SQL Warehouse By Usage", style={'color': '#002147'}),  # A specific shade of blue
+                        ], width=12, style={'margin-left':'10px', 'margin-right':'10px'})
+                    ])
+        ]),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-save-sql-usage",
+                                type="default",
+                                color= '#002147', 
+                                children=html.Button('Save Changes', id='usage-sql-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-clear-sql-usage",
+                                type="default",
+                                color= '#002147',
+                                children=html.Button('Clear Changes', id='usage-sql-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                            )
+                        ], width=2),
+                        dbc.Col(
+                                width={"size": 6}
+                            ),
+                        dbc.Col([
+                            html.P("Top N By Usage:", style={'color': '#002147', 'margin-bottom': '10px'}),
+                            dcc.Input(
+                                id='top-n-sql',
+                                type='number',  # Set the input type to 'number'
+                                placeholder='Top N SQL Warehouses By Usage',
+                                value = DEFAULT_TOP_N,
+                                step=1,  # Step value to ensure only integers can be entered
+                                debounce=True  # Wait for the user to finish typing before triggering the callback
+                            ),
+                        ], width=2, style={'margin-bottom': '10px'})
+                    ]),
+
+                    html.Div(id='usage-sql-change-indicator', children=[
+                        html.Span("! Pending Changes to be Saved", style={'color': '#DAA520'}),  # Dark yellow color
+                    ], style={'display': 'none'}),
+
+                    dag.AgGrid(
+                        id='sql-usage-ag-grid',
+                        columnDefs=[
+                            {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 'suppressSizeToFit': True},
+                            {'headerName': 'Warehouse Id', 'field': 'warehouse_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True},
+                            {'headerName': 'Policy Status', 'field': 'is_tag_policy_match', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Missing Policy Tags', 'field': 'missing_tags', 'editable': True, 'suppressSizeToFit': True},
+                            {'headerName': 'Tags', 'field': 'tags', 'editable': True, 'suppressSizeToFit': True},
+                            {'headerName': 'Add Policy Key', 'field': 'input_policy_key', 'editable': True, 'cellStyle': {'backgroundColor': 'rgba(111, 171, 208, 0.9)'}, 'suppressSizeToFit': True},
+                            # 'cellEditor': 'agSelectCellEditor', 'cellEditorParams': {'values': [option.get('value') for option in tag_keys]}},
+                            {'headerName': 'Add Policy Value', 'field': 'input_policy_value', 'editable': True, 'cellStyle': {'backgroundColor': 'rgba(111, 171, 208, 0.9)'},'suppressSizeToFit': True},
+                            {'headerName': 'Usage Amount', 'field': 'Dollar_DBUs_List', 'editable': False, 'suppressSizeToFit': True,
+                                    'cellRenderer': 'BarGuage', 'guageColor': 'rgba(111, 171, 208, 0.7)'},
+                            {'headerName': 'T7 Usage', 'field': 'T7_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'T30 Usage', 'field': 'T30_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'T90 Usage', 'field': 'T90_Usage', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'BarGuage', 'guageColor':'rgba(172, 213, 180, 0.6)'},
+                            {'headerName': 'Resource Age', 'field': 'resource_age', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'HeatMap'},
+                            {'headerName': 'Days Since Last Use', 'field': 'days_since_last_use', 'editable': False, 'suppressSizeToFit': True, 'cellRenderer': 'HeatMap'},
+                            {'headerName': 'First Usage Date', 'field': 'first_usage_date', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Latest Usage Date', 'field': 'latest_usage_date', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Product Type', 'field': 'product_type', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Workspace ID', 'field': 'workspace_id', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Account ID', 'field': 'account_id', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Resource Owner', 'field': 'resource_owner', 'editable': False, 'suppressSizeToFit': True},
+                            {'headerName': 'Usage Quantity', 'field': 'usage_quantity', 'editable': False, 'suppressSizeToFit': True}
+                        ],
+                        defaultColDef=defaultColDef,
+                        columnSize="sizeToFit",
+                        rowData = get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
+                    ),
+                    dcc.Store(id='sql-ag-grid-store'),
+                    dcc.Store(id='sql-ag-grid-original-data', data = get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                ])
+            ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'}),
+            html.Div(id='save-adhoc-trigger', style={'display': 'none'}),
+            html.Div(id='save-jobs-trigger', style={'display': 'none'}) ,
+            html.Div(id='save-tags-trigger', style={'display': 'none'}) , ## From when we just need to reload locally - no DB changes
+            html.Div(id='reload-tags-trigger', style={'display': 'none'}) , ## For when we actually need to reload from DB
+            html.Div(id='save-sql-trigger', style={'display': 'none'}) ### Output element so all AG grids can update the compute tags to one output callback
+        ]),
+        ###### END SQL Usage Grid
 
     html.Div(id='output-container')
     ])

@@ -1,6 +1,6 @@
 /* Style for the sidebar */
 .sidebar {
-    background-color: #002147;  /* Dark navy blue */
+    background-color: #f8f8fc;  /*light silver */
     color: #002147;
     min-height: 100vh;  /* Full height */
     padding: 0px;
@@ -26,8 +26,9 @@ html, body, .app-container {
 
 .sidebar-col {
     transition: all 0.1s;
-    background-color: #002147;
     padding: 0px;
+    background-color: #f8f8fc; 
+    border: 1px solid #002147;  /* Dark navy blue */
 }
 
 .main-content-col {
@@ -49,7 +50,7 @@ html, body, .app-container {
 
 /* NavLink adjustments for full rectangle highlight */
 .sidebar .nav-link {
-    color: white;
+    color: #002147;
     padding: 12px 20px;  /* Adjust padding to increase the clickable area */
     display: block;  /* Ensure links are block elements to fill the area */
     margin: 5px;  /* Remove any default margin */
@@ -59,40 +60,21 @@ html, body, .app-container {
 
 /* Active NavLink styling */
 .sidebar .nav-link.active, .sidebar .nav-link:hover {
-    background-color: #f8f9fa;  /* Dark grey for active NavLink */
-    color: #002147;
+    background-color: #002147;  /* Dark grey for active NavLink */
+    color: #f8f9fa;
 }
 /* Style for the main content area */
 .main-content {
     background-color: #f8f8fc; 
     padding: 5px;
-    margin-top: 2px;
-    border: 2px solid #002147;  /* Dark navy blue */
+    border: 1px solid #002147;  /* Dark navy blue */
     transition: all 0.8s;
 }
 
 .prettier-button {
     background-color: white; /* White background on hover */
     color: #002147; /* Dark blue text on hover */
-    border: 2px solid #002147;  /* Dark navy blue */
-    font-size: 16px;
-    padding: 8px 16px;
-    margin-top: 10px;
-}
-
-.add-button {
-    background-color: white; /* White background on hover */
-    color: #002147; /* Dark blue text on hover */
-    border: 2px solid #048239;  /* Dark navy blue */
-    font-size: 16px;
-    padding: 8px 16px;
-    margin-top: 10px;
-}
-
-.remove-button {
-    background-color: white; /* White background on hover */
-    color: #002147; /* Dark blue text on hover */
-    border: 2px solid #a22607;  /* Dark navy blue */
+    border: 1px solid #002147;  /* Dark navy blue */
     font-size: 16px;
     padding: 8px 16px;
     margin-top: 10px;
@@ -101,13 +83,13 @@ html, body, .app-container {
 .prettier-button:hover {
     background-color: #002147;
     color: white;
-    border: 2px solid white;  /* Dark navy blue */
+    border: 1px solid white;  /* Dark navy blue */
 }
 
 .prettier-button:active {
     background-color: #5b3c88; /* Deep purple background when clicked */
     color: white; /* Keep text white when active */
-    border: 2px solid #002147;  /* Dark navy blue */
+    border: 1px solid #002147;  /* Dark navy blue */
 }
 
 .label-container {
@@ -188,46 +170,9 @@ html, body, .app-container {
     color: #002147 !important;
 }
 
-.radio-custom {
-    padding: 20px;
-    font-size: 20px;
-    color: #002147; /* Navy blue */
-}
-
-.radio-custom-label {
-    display: inline-block;
-    background-color: #f0f0f0;
-    color: #002147;
-    font-size: 18px;
-    padding: 10px 20px;
-    margin-right: 20px;
-    border-radius: 20px;
-    transition: background-color 0.3s, color 0.3s;
-    cursor: pointer;
-}
-
-.radio-custom .Select-input input {
-    margin-right: 10px; /* Space between the radio button and the label */
-}
-
-.radio-custom-label {
-    margin-right: 20px; /* Space between radio items */
-}
-
-/* Hover effect for radio labels */
-.radio-custom-label:hover {
-    background-color: #e0e0e0;
-}
-
-/* Styling for selected radio label */
-.radio-custom input[type="radio"]:checked + label {
-    background-color: #002147;  /* Navy blue */
-    color: white;
-}
-
 .ag-root-wrapper {
     background-color: white;  /* Matches the plot and paper bgcolor */
-    border: 2px solid #002147;  /* Navy blue border */
+    border: 1px solid #002147;  /* Navy blue border */
 }
 
 .ag-root-wrapper .ag-row.ag-row-hover {
@@ -257,4 +202,66 @@ html, body, .app-container {
 .highlight-changed {
     background-color: rgb(212, 166, 102) !important;
     color: black !important;
+}
+
+.agedit-button {
+    font-size: 32px; 
+    color: #002147;
+    margin: 10px;
+    border: none;
+    background: none;
+    width: 50px; /* Set the desired width */
+    height: 50px; /* Set the desired height to match the width */
+    border-radius: 50%; /* Makes the button circular */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none; /* Remove border */
+    padding: 0; /* Remove padding */
+
+}
+
+.agedit-button:hover {
+    color: #bc0f0f;
+    border: none;
+    background: none;
+}
+
+.agedit-button:active {
+    color: white; /* Keep text white when active */
+    border: white;
+    background: #002147;
+    width: 50px; /* Set the desired width */
+    height: 50px; /* Set the desired height to match the width */
+    border-radius: 50%; /* Makes the button circular */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none; /* Remove border */
+    padding: 0; /* Remove padding */
+}
+
+.toggle-button {
+    font-size: 32px; 
+    width: 60px; 
+    height: 60px;
+    color: #002147;
+    margin: 10px;
+    margin-left: 30px;
+    margin-bottom: 20px;
+    border: none;
+    background: none;
+}
+
+.toggle-button:hover {
+    color: #bc0f0f;
+    border: none;
+    background: none;
+}
+
+.toggle-button:active {
+    color: white; /* Keep text white when active */
+    border: none;
+    background: #002147;
+    background-color: #002147; /* White background on hover */
 }
