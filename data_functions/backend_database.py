@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.ext.automap import automap_base
 from typing import Dict
 from contextlib import contextmanager
+from pandasql import sqldf
 
 # Beside the CamelCase types shown below, line comments reflect
 # the underlying Databricks SQL / Delta table type
@@ -35,7 +36,6 @@ from sqlalchemy import (
     Identity
 )
 from sqlalchemy.orm import DeclarativeBase, Session
-
 
 ##### Query Management for executing arbitrary queries to the database with parameter bindings and post result filters on client side
 
@@ -208,13 +208,18 @@ def execute_sql_from_file(engine, filepath):
 
 
 
-
+##### Run SQL on Pandas DFs
+# Assuming filtered_result is defined somewhere above this code
+def run_pandas_sql(query, df):
+    # Pass the DataFrame explicitly in a dictionary
+    return sqldf(query, {'df': df})
 
 ##### Load Dynamic SQL Files for TAG_QUERY
 def build_tag_query_from_params(
                                 start_date, end_date, 
                                 tag_filter = None,
                                 product_category = None, 
+                                compute_tag_keys = None,
                                 tag_policies = None, tag_keys = None, tag_values = None, 
                                 final_agg_query=None):
     
@@ -250,6 +255,12 @@ def build_tag_query_from_params(
         product_categories_str = ', '.join([f"'{key}'" for key in product_category]) 
         FINAL_QUERY = FINAL_QUERY + f"\n AND billing_origin_product IN ({product_categories_str})"
 
+    if compute_tag_keys:
+
+        compute_tag_keys_str = ', '.join([f"'{key}'" for key in compute_tag_keys]) 
+        FINAL_QUERY = FINAL_QUERY + f"\n AND size(array_intersect(map_keys(custom_tags), array({compute_tag_keys_str}))) >= 1"
+
+
     if tag_filter == 'Matched':
         FINAL_QUERY = FINAL_QUERY + f"\n AND IsTaggingMatch = 'In Policy' "
     elif tag_filter == 'Not Matched':
@@ -273,6 +284,8 @@ def build_tag_query_from_params(
 def build_adhoc_ag_grid_from_params(
                                 start_date, end_date, tag_filter = None,
                                 tag_policies = None, tag_keys = None, tag_values = None, 
+                                product_category = None,
+                                compute_tag_keys = None,
                                 final_agg_query=None, top_n = None):
     
     ## Load Base Query Template Parts
@@ -308,7 +321,7 @@ def build_adhoc_ag_grid_from_params(
         top_n = int(top_n)
         BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
 
-    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, product_category=product_category, final_agg_query=BASE_AGG_QUERY)
     
     return FINAL_QUERY
 
@@ -317,6 +330,8 @@ def build_adhoc_ag_grid_from_params(
 def build_sql_ag_grid_from_params(
                                 start_date, end_date, tag_filter = None,
                                 tag_policies = None, tag_keys = None, tag_values = None, 
+                                compute_tag_keys = None,
+                                product_category = None, 
                                 final_agg_query=None, top_n = None):
     
     ## Load Base Query Template Parts
@@ -353,7 +368,7 @@ def build_sql_ag_grid_from_params(
         BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
 
 
-    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, product_category=product_category, final_agg_query=BASE_AGG_QUERY)
     
     return FINAL_QUERY
 
@@ -362,6 +377,8 @@ def build_sql_ag_grid_from_params(
 def build_jobs_ag_grid_from_params(
                                 start_date, end_date, tag_filter = None,
                                 tag_policies = None, tag_keys = None, tag_values = None, 
+                                compute_tag_keys = None,
+                                product_category = None, 
                                 final_agg_query=None, top_n = None):
     
     ## Load Base Query Template Parts
@@ -398,7 +415,7 @@ def build_jobs_ag_grid_from_params(
         top_n = int(top_n)
         BASE_AGG_QUERY = BASE_AGG_QUERY + f"\n LIMIT {top_n}"
 
-    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=BASE_AGG_QUERY)
+    FINAL_QUERY = build_tag_query_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, product_category=product_category, final_agg_query=BASE_AGG_QUERY)
     return FINAL_QUERY
 
 ##### Initial Data Model of App - this tables must exist for app to run so they are deployed and checked on start-up

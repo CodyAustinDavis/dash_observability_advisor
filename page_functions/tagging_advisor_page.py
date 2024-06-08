@@ -4,7 +4,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 import os
 import dash_ag_grid as dag
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from chart_functions import ChartFormats
 from visual_functions import (
     get_adhoc_ag_grid_column_defs
@@ -37,158 +37,179 @@ from sqlalchemy import create_engine, text
 
 ###### We want to load the data on app start up for filters so the UX is not slow when we switch tabs
 """
-###### TO OD: 
+###### TO DO: 
 1. Update Filters to only load the distinct values that are currently selected in the other filters
 """
 
-# Load environment variables from .env file
-# Get the directory of the current script
-base_dir = os.path.dirname(os.path.abspath(__file__))
-# Construct the path to the .env file
-env_path = os.path.join(base_dir, '../', 'config', '.env')
-# Load the environment variables
-load_dotenv(dotenv_path=env_path)
-
-
-## load auth into variables
-host = os.getenv("DATABRICKS_SERVER_HOSTNAME")
-http_path = os.getenv("DATABRICKS_HTTP_PATH")
-access_token = os.getenv("DATABRICKS_TOKEN")
-catalog = os.getenv("DATABRICKS_CATALOG")
-schema = os.getenv("DATABRICKS_SCHEMA")
-
-DEFAULT_TOP_N = 100
-
-##### Load Init Scripts for Data Tagging Advisor
-
-## Run init scripts on app start-up
-
-## Create Engine on start up
-### System query manager uses the system catalog and schema scope (for the tables it creates and manages)
-system_query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token, catalog= catalog, schema = schema)
-system_engine = system_query_manager.get_engine()
-
 #### Run init SQL script to make sure all required tables are created
-sql_init_filepath = './config/init.sql'  # Ensure the path is correct
-execute_sql_from_file(system_engine, sql_init_filepath)
 
 
-## Create all init tables that this app needs to exists - We use SQL Alchemy models so we can more easily programmatically write back
-Base.metadata.create_all(system_engine, checkfirst=True)
+class TagAdvisorPageManager():
 
-#### Get Tables to Manage and Write To
-TagPoliciesAGGRid = system_query_manager.reflect_table('app_tag_policies')
-ComputeTaggedPoliciesAGGrid = system_query_manager.reflect_table('app_compute_tags')
+    def __init__(self, system_query_manager):
+        self.system_query_manager = system_query_manager
 
-
-#### For the Reflection / AG Grid updates
-def get_tag_policies_grid_data():
-    session = system_query_manager.get_new_session()
-    try:
-        query = session.query(TagPoliciesAGGRid)
-        df = pd.read_sql(query.statement, session.bind)
-    finally:
-        session.close()
-    return df #.to_dict('records')
+        return
+    
+    def run_init_scripts(self):
+        system_engine = self.system_query_manager.get_engine()
+        sql_init_filepath = './config/init.sql'  # Ensure the path is correct
+        execute_sql_from_file(system_engine, sql_init_filepath)
+        ## Create all init tables that this app needs to exists - We use SQL Alchemy models so we can more easily programmatically write back
+        Base.metadata.create_all(system_engine, checkfirst=True)
+        return
 
 
-#### Get Adhoc Usage AG Grid Data
-def get_adhoc_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
+    #### For the Reflection / AG Grid updates
+    def get_tag_policies_grid_data(self):
 
-    query = build_adhoc_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter= tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
-    session = system_query_manager.get_new_session()
-    try:
-
-        df = pd.read_sql(text(query), session.bind)
-        ## Need to ad a row index to track changes since this result does not have a clear primary key
-        df['rowIndex'] = df.index
-
-    finally:
-        session.close()
-    return df #.to_dict('records')
+        TagPoliciesAGGRid = self.system_query_manager.reflect_table('app_tag_policies')
+        session = self.system_query_manager.get_new_session()
+        try:
+            query = session.query(TagPoliciesAGGRid)
+            df = pd.read_sql(query.statement, session.bind)
+        finally:
+            session.close()
+        return df #.to_dict('records')
 
 
-#### Get Jobs Usage AG Grid Data
-def get_jobs_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
+    #### Get Adhoc Usage AG Grid Data
+    def get_adhoc_clusters_grid_data(self, start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
 
-    query = build_jobs_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
-    session = system_query_manager.get_new_session()
-    try:
+        query = build_adhoc_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter= tag_filter, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
+        session = self.system_query_manager.get_new_session()
+        try:
 
-        df = pd.read_sql(text(query), session.bind)
-        df['rowIndex'] = df.index
-    finally:
-        session.close()
-    return df #.to_dict('records')
+            df = pd.read_sql(text(query), session.bind)
+            ## Need to ad a row index to track changes since this result does not have a clear primary key
+            df['rowIndex'] = df.index
 
-#### Get SQL Usage AG Grid Data
-def get_sql_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, tag_keys=None, tag_values=None, top_n=100):
-
-    query = build_sql_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, top_n=top_n)
-    session = system_query_manager.get_new_session()
-    try:
-
-        df = pd.read_sql(text(query), session.bind)
-        df['rowIndex'] = df.index
-    finally:
-        session.close()
-    return df #.to_dict('records')
+        finally:
+            session.close()
+        return df #.to_dict('records')
 
 
-##### Get Compute Tagged Table
-def get_compute_tagged_grid_data():
-    session = system_query_manager.get_new_session()
-    try:
-        query = session.query(ComputeTaggedPoliciesAGGrid)
-        df = pd.read_sql(query.statement, session.bind)
-        df['rowIndex'] = df.index
-    finally:
-        session.close()
-    return df #.to_dict('records')
+    #### Get Jobs Usage AG Grid Data
+    def get_jobs_clusters_grid_data(self, start_date, end_date, tag_filter=None, product_category=None, tag_policies=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
+
+        query = build_jobs_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
+        session = self.system_query_manager.get_new_session()
+        try:
+
+            df = pd.read_sql(text(query), session.bind)
+            df['rowIndex'] = df.index
+        finally:
+            session.close()
+        return df #.to_dict('records')
 
 
-##### Load Parameter Filters
-### Create a non-system query manager to read from tables in any catalog/schema
-query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token)
-query_engine = query_manager.get_engine()
+    #### Get SQL Usage AG Grid Data
+    def get_sql_clusters_grid_data(self, start_date, end_date, tag_filter=None, product_category = None, tag_policies=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
+
+        query = build_sql_ag_grid_from_params(start_date=start_date, end_date=end_date, tag_filter=tag_filter, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
+        session = self.system_query_manager.get_new_session()
+        try:
+
+            df = pd.read_sql(text(query), session.bind)
+            df['rowIndex'] = df.index
+        finally:
+            session.close()
+        return df #.to_dict('records')
 
 
-## load date filters
-df_date_min_filter = pd.to_datetime(get_start_ts_filter_min(system_engine).iloc[0, 0]).date()
-df_date_max_filter = pd.to_datetime(get_end_ts_filter_max(system_engine).iloc[0, 0]).date()
+    ##### Get Compute Tagged Table
+    def get_compute_tagged_grid_data(self):
 
-# Get today's date
-today = datetime.now()
-# Subtract 7 days
-date_30_days_ago = today - timedelta(days=30)
-current_date_filter = today.date()
-day_30_rolling_filter = date_30_days_ago.date()
+        ComputeTaggedPoliciesAGGrid = self.system_query_manager.reflect_table('app_compute_tags')
+        session =self.system_query_manager.get_new_session()
+        try:
+            query = session.query(ComputeTaggedPoliciesAGGrid)
+            df = pd.read_sql(query.statement, session.bind)
+            df['rowIndex'] = df.index
+        finally:
+            session.close()
+        return df #.to_dict('records')
 
-## load product category filters
-df_product_cat_filter = get_product_category_filter_tuples(system_engine)
-df_cluster_id_filter = get_cluster_id_category_filter(system_engine)
-df_job_id_filter = get_job_id_category_filter(system_engine)
 
-# Fetch distinct tag policy names within the context manager
+    def get_base_tag_page_filter_defaults(self):
 
-# Create a session factory with autocommit enabled
-with QueryManager.session_scope(system_engine) as session:
+        system_engine = self.system_query_manager.get_engine()
 
-    distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
-    distinct_tag_keys = pd.read_sql(text("""
-                                    SELECT tag_key FROM main.dash_observability_advisor.app_tag_policies
-                                    QUALIFY ROW_NUMBER() OVER (PARTITION BY tag_key ORDER BY update_timestamp DESC) = 1"""), con=system_engine)
-    distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
+        ## load date filters
+        df_date_min_filter = pd.to_datetime(get_start_ts_filter_min(system_engine).iloc[0, 0]).date()
+        df_date_max_filter = pd.to_datetime(get_end_ts_filter_max(system_engine).iloc[0, 0]).date()
 
-    tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
-    tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
-    tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
+        # Get today's date
+        today = datetime.now()
+        # Subtract 7 days
+        date_30_days_ago = today - timedelta(days=30)
+        current_date_filter = today.date()
+        day_30_rolling_filter = date_30_days_ago.date()
+
+        ## load product category filters
+        df_product_cat_filter = get_product_category_filter_tuples(system_engine)
+        df_cluster_id_filter = get_cluster_id_category_filter(system_engine)
+        df_job_id_filter = get_job_id_category_filter(system_engine)
+
+        return df_date_min_filter, df_date_max_filter, current_date_filter, day_30_rolling_filter, df_product_cat_filter, df_cluster_id_filter, df_job_id_filter
+
+
+
+    def get_tag_filters(self):
+        system_engine = self.system_query_manager.get_engine()
+
+        # Fetch distinct tag policy names within the context manager
+        with self.system_query_manager.session_scope(system_engine) as session:
+
+            ## 1 Query Instead of 3
+            tag_policy_result = session.query(TagPolicies.tag_policy_name, TagPolicies.tag_key, TagPolicies.tag_value).all()
+
+            tag_keys = session.query(text("""
+                                        DISTINCT explode(map_keys(custom_tags)) AS TagKeys FROM clean_usage"""
+                                        )).all()
+            
+            compute_tag_keys_filter = [{'label': name[0] if name[0] is not None else 'None', 'value': name[0] if name[0] is not None else 'None'} for name in tag_keys]
+
+            # Process the query result and store the distinct values in variables in your Dash app
+            distinct_tag_policy_names = set()
+            distinct_tag_keys = set()
+            distinct_tag_values = set()
+
+            for row in tag_policy_result:
+                distinct_tag_policy_names.add(row.tag_policy_name)
+                distinct_tag_keys.add(row.tag_key)
+                if row.tag_value is not None:
+                    distinct_tag_values.add(row.tag_value)
+
+            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policy_names]
+            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys]
+            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values]
+
+        return compute_tag_keys_filter, tag_policy_filter, tag_key_filter, tag_value_filter
+
 
 
 
 #### Tagging Advisor Page Function
-def render_tagging_advisor_page():
 
+def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
+                                current_date_filter = datetime.now().date(), 
+                                day_30_rolling_filter = datetime.now().date() - timedelta(days=30),
+                                df_product_cat_filter = None,
+                                df_cluster_id_filter = None,
+                                df_job_id_filter = None,
+                                compute_tag_keys_filter=None, 
+                                tag_policy_filter=None, 
+                                tag_key_filter=None, 
+                                tag_value_filter=None,
+                                ## Initial Condition Data Frames
+                                tag_policies_grid_df = None,
+                                compute_tagged_grid_df = None,
+                                adhoc_clusters_grid_df = None,
+                                jobs_clusters_grid_df = None,
+                                sql_clusters_grid_df = None,
+                                DEFAULT_TOP_N = 100
+                                ):
 
     cellStyle = {
         "styleConditions": [
@@ -206,15 +227,30 @@ def render_tagging_advisor_page():
 
 
     ##### REDER TAGGING PAGE
-    layout = html.Div([
+    layout = dbc.Container([
         html.Div([
             dbc.Row([
                 dbc.Col([
                     html.H1("Databricks Tagging Manager", style={'color': '#002147'}),  # A specific shade of blue
-                ], width=8),
+                ], width=6),
                 dbc.Col([
                     html.Div([
-                        html.Label('Tag Match Filter', style={'font-weight': 'bold', 'color': '#002147'}),
+                        html.Label('Compute Tag Key Filter', style={'font-weight': 'bold', 'color': '#002147'}),
+                        # RadioItems component for the filter
+                            dcc.Dropdown(
+                                id='compute-tag-filter-dropdown',
+                                options=compute_tag_keys_filter,
+                                value='All', 
+                                multi=True,
+                                clearable=True  # Prevents user from clearing the selection, ensuring a selection is always active
+                            , style={'margin-bottom': '2px', 'margin-top': '10px'}),
+                            # Output component to display the result based on the selected filter
+                            html.Div(id='filter-output')
+                    ])
+                ], width=2),
+                dbc.Col([
+                    html.Div([
+                        html.Label('Tag Policy Match Filter', style={'font-weight': 'bold', 'color': '#002147'}),
                         # RadioItems component for the filter
                             dcc.Dropdown(
                                 id='tag-filter-dropdown',
@@ -417,7 +453,19 @@ def render_tagging_advisor_page():
                                 color= '#002147')
                             ])
                         ], width=6)
-            ], id='output-data')
+            ], id='output-data'),
+            dbc.Row([dbc.Col([
+                    html.Div([
+                            dcc.Loading(
+                                id="loading-tag-by-value-chart",
+                                type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
+                                children=html.Div([dcc.Graph(id='usage-by-tag-value-line-chart', className = 'chart-visuals')]),
+                                fullscreen=False,  # True to make the spinner fullscreen
+                                color= '#002147')
+                            ])
+                        ], width=12)
+            ]
+            )
         ]
         ),
 
@@ -530,7 +578,7 @@ def render_tagging_advisor_page():
                                 'suppressSizeToFit': True},
                             ],
                             defaultColDef=defaultColDef,
-                            rowData=get_tag_policies_grid_data().to_dict('records'),
+                            rowData=tag_policies_grid_df.to_dict('records'),
                             dashGridOptions={
                                 'enableRangeSelection': True,
                                 'rowSelection': 'multiple'
@@ -642,14 +690,14 @@ def render_tagging_advisor_page():
                                 'suppressSizeToFit': True},
                             ],
                             defaultColDef=defaultColDef,
-                            rowData= get_compute_tagged_grid_data().to_dict('records'),
+                            rowData= compute_tagged_grid_df.to_dict('records'),
                             dashGridOptions={
                                 'enableRangeSelection': True,
                                 'rowSelection': 'multiple'
                                 }
                         ),
-                        dcc.Store(id='cluster-tag-rowData-store', data=get_compute_tagged_grid_data().to_dict('records')),
-                        dcc.Store(id='cluster-tag-changes-store', data=get_compute_tagged_grid_data().to_dict('records'))
+                        dcc.Store(id='cluster-tag-rowData-store', data=compute_tagged_grid_df.to_dict('records')),
+                        dcc.Store(id='cluster-tag-changes-store', data=compute_tagged_grid_df.to_dict('records'))
                     ])
             ], width=6, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
         ]),
@@ -715,11 +763,11 @@ def render_tagging_advisor_page():
                         columnDefs=get_adhoc_ag_grid_column_defs(tag_key_filter),
                         defaultColDef=defaultColDef,
                         columnSize="sizeToFit",
-                        rowData = get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        rowData = adhoc_clusters_grid_df.to_dict('records'),#get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
                         dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
                     ),
                     dcc.Store(id='adhoc-ag-grid-store'),
-                    dcc.Store(id='adhoc-ag-grid-original-data', data = get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                    dcc.Store(id='adhoc-ag-grid-original-data', data = adhoc_clusters_grid_df.to_dict('records')),
                     dcc.Store(id='tag-keys-store', data=tag_key_filter)
                 ])
             ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
@@ -814,11 +862,11 @@ def render_tagging_advisor_page():
                         ],
                         defaultColDef=defaultColDef,
                         columnSize="sizeToFit",
-                        rowData = get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        rowData = jobs_clusters_grid_df.to_dict('records'),#get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
                         dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
                     ),
                     dcc.Store(id='jobs-ag-grid-store'),
-                    dcc.Store(id='jobs-ag-grid-original-data', data = get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                    dcc.Store(id='jobs-ag-grid-original-data', data = jobs_clusters_grid_df.to_dict('records'))
                 ])
             ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'})
         ]),
@@ -908,11 +956,11 @@ def render_tagging_advisor_page():
                         ],
                         defaultColDef=defaultColDef,
                         columnSize="sizeToFit",
-                        rowData = get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
+                        rowData = sql_clusters_grid_df.to_dict('records'),#get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records'),  # Will be populated via callback
                         dashGridOptions={'enableRangeSelection': True, 'rowSelection': 'multiple'}
                     ),
                     dcc.Store(id='sql-ag-grid-store'),
-                    dcc.Store(id='sql-ag-grid-original-data', data = get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
+                    dcc.Store(id='sql-ag-grid-original-data', data = sql_clusters_grid_df.to_dict('records')) #get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N).to_dict('records')),
                 ])
             ], width=11, style={'margin-left':'10px', 'margin-right':'10px', 'margin-bottom': '20px'}),
             html.Div(id='save-adhoc-trigger', style={'display': 'none'}),
@@ -923,8 +971,8 @@ def render_tagging_advisor_page():
         ]),
         ###### END SQL Usage Grid
 
-    html.Div(id='output-container')
-    ])
+    dbc.Container(id='output-container')
+    ], fluid=True)
 
     return layout
 

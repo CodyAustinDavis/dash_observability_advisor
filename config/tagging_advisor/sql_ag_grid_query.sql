@@ -21,4 +21,3 @@ FROM clean_usage
 WHERE billing_origin_product IN ('SQL')
 AND clean_warehouse_id IS NOT NULL
 GROUP BY clean_warehouse_id
-ORDER BY Dollar_DBUs_List DESC

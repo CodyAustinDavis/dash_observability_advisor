@@ -12,4 +12,3 @@ SELECT CASE WHEN len(PolicyTagValue) = 0
 SUM(Dollar_DBUs_List) AS `Usage Amount`
 FROM exploded_tags
 GROUP BY CASE WHEN len(PolicyTagValue) = 0 THEN 'Not In Policy' ELSE PolicyTagValue END 
-ORDER BY `Usage Amount` DESC

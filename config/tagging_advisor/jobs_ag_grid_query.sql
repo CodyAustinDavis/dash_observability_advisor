@@ -42,5 +42,4 @@ date_diff(DAY, MIN(first_usage_date) , getdate()) AS resource_age,
 date_diff(DAY, MAX(latest_usage_date) , getdate()) AS days_since_last_use
 FROM base_clusters 
 WHERE product_type IN ('JOBS')
-GROUP BY job_id
-ORDER BY Dollar_DBUs_List DESC;
+GROUP BY job_id;

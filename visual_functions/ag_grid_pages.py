@@ -3,7 +3,7 @@ def get_adhoc_ag_grid_column_defs(tag_keys):
     
     updated_column_defs = [
         {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 'suppressSizeToFit': True},
-        {'headerName': 'Cluster ID', 'field': 'cluster_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True},
+        {'headerName': 'Cluster ID', 'field': 'cluster_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True, 'filter': 'agTextColumnFilter' },
         {'headerName': 'Cluster Name', 'field': 'cluster_name', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'Policy Status', 'field': 'is_tag_policy_match', 'editable': False,'width': 100, 'suppressSizeToFit': True},
         {'headerName': 'Missing Policy Tags', 'field': 'missing_tags', 'editable': False,  'suppressSizeToFit': True},

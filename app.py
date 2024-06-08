@@ -16,8 +16,6 @@ TO DO:
 BUGS: 
 1. Make filters update based on other selected filter values
 2. AG Grid Cannot handle deleting tag policies and having it show up properly. I think this is a spark bug - UC is right but the query is now
-3. For the Usage AG Grids, optimize data retrieval by not calling back to the database each time the buttons are pressed, just remove the changes in client side
-
 """
 
 
@@ -37,6 +35,9 @@ import pandas as pd
 from sqlalchemy import bindparam
 from threading import Thread
 from data_functions.utils import *
+from pandasql import sqldf
+from flask_caching import Cache
+from datetime import date, datetime, time, timedelta, timezone
 
 
 ## Log SQL Alchemy Commands
@@ -59,37 +60,76 @@ access_token = os.getenv("DATABRICKS_TOKEN")
 catalog = os.getenv("DATABRICKS_CATALOG")
 schema = os.getenv("DATABRICKS_SCHEMA")
 
-
-## Initialize the Dash app with a Bootstrap theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
-
+DEFAULT_TOP_N = 100
 ## Load Visual Specific Query Parts
 AGG_QUERY = read_sql_file("./config/tagging_advisor/tag_date_agg_query.sql")
 MATCHED_IND_QUERY = read_sql_file("./config/tagging_advisor/matched_indicator_query.sql")
 TAG_VALUES_QUERY = read_sql_file("./config/tagging_advisor/tag_values_query.sql")
 HEATMAP_QUERY = read_sql_file("./config/tagging_advisor/tag_sku_heatmap_query.sql")
+TAG_VALUES_OVER_TIME_QUERY = read_sql_file("./config/tagging_advisor/tag_values_over_time.sql")
+
+
+###########  Initialize the Dash app with a Bootstrap theme ###########
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
+
+##### Load Init Scripts 
+## Create Engine on start up
+### System query manager uses the system catalog and schema scope (for the tables it creates and manages)
+system_query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token, catalog= catalog, schema = schema)
+system_engine = system_query_manager.get_engine()
+
+### Functions to process data for these tabs
+tag_advisor_manager = TagAdvisorPageManager(system_query_manager=system_query_manager)
+setting_manager = SettingsPageManager(system_query_manager=system_query_manager)
+
+
+##### Initialize Cache for Data Functions
+cache = Cache(app.server, config={
+    'CACHE_TYPE': 'filesystem',
+    'CACHE_DIR': './config/cache/'
+})
+
+#### Define cached data calling functions ######
+@cache.memoize(timeout=300)  # Cache the results for 5 minutes
+def cached_execute_query_to_df(query):
+    return system_query_manager.execute_query_to_df(query)
+
+### Cache the start up load specifically
+@cache.memoize(timeout=1200)
+def cached_get_base_tag_page_filter_defaults():
+    return tag_advisor_manager.get_base_tag_page_filter_defaults()
+
+@cache.memoize(timeout=1200)
+def cached_get_tag_filters():
+    return tag_advisor_manager.get_tag_filters()
+
+@cache.memoize(timeout=1200)
+def cached_get_tag_policies_grid_data():
+    return tag_advisor_manager.get_tag_policies_grid_data()
+
+@cache.memoize(timeout=1200)
+def cached_get_compute_tagged_grid_data():
+    return tag_advisor_manager.get_compute_tagged_grid_data()
+
+@cache.memoize(timeout=1200)
+def cached_get_adhoc_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
+    return tag_advisor_manager.get_adhoc_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
+
+
+@cache.memoize(timeout=1200)
+def cached_get_jobs_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
+    return tag_advisor_manager.get_jobs_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
+
+
+@cache.memoize(timeout=1200)
+def cached_get_sql_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
+    return tag_advisor_manager.get_sql_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
 
 
 
-# Function to refresh materialized view
-def refresh_materialized_view():
-    conn = system_query_manager.get_engine().connect()
-    cursor = conn.cursor()
-    cursor.execute("REFRESH MATERIALIZED VIEW clean_usage")
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-# Function to run the SQL query in a separate thread
-
-def run_query_async():
-    thread = Thread(target=refresh_materialized_view)
-    thread.start()
-    return thread
-
-
-# Initialize a global variable to keep track of the thread
-query_thread = None
+####### Load Defaults for App Start Up
+## Create Data Model and MV App Is Based On
+tag_advisor_manager.run_init_scripts()
 
 # Define the layout of the main app
 
@@ -104,10 +144,10 @@ app.layout = dbc.Container([
                         html.Div([  # Container for the logo and possibly other header elements
                             html.Img(id='sidebar-logo', src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto'}),
                         ]),
-                        dbc.NavLink("Tags", href="/tag-manager", id="tab-1-link"),
-                        dbc.NavLink("Alerts", href="/alert-manager", id="tab-2-link"),
-                        dbc.NavLink("Contracts", href="/contract-manager", id="tab-3-link"),
-                        dbc.NavLink("Settings", href="/settings", id="tab-4-link"),
+                        dbc.NavLink("Tags", href="/tag-manager", id="tab-1-link", active='exact'),
+                        dbc.NavLink("Alerts", href="/alert-manager", id="tab-2-link", active='exact'),
+                        dbc.NavLink("Contracts", href="/contract-manager", id="tab-3-link", active='exact'),
+                        dbc.NavLink("Settings", href="/settings", id="tab-4-link", active='exact'),
                     ],
                     vertical=True,
                     pills=True,
@@ -119,11 +159,26 @@ app.layout = dbc.Container([
         ], width={"size": 1, "offset": 0}, id="sidebar-col", className="sidebar-col"),
         dbc.Col([
             dcc.Location(id='url', refresh=False),
-            html.Div(id='tab-content', className="main-content")
+            dbc.Container(id='tab-content', className="main-content", fluid=True)
         ], id="main-content-col", width=11)
     ])
 ], fluid=True, className="app-container")
 
+
+
+### Manage Tab Selections
+@app.callback(
+    [Output('tab-1-link', 'active'),
+     Output('tab-2-link', 'active'),
+     Output('tab-3-link', 'active'),
+     Output('tab-4-link', 'active')],
+    [Input('url', 'pathname')]
+)
+def set_active_tab(pathname):
+    if pathname == "/":
+        # Assuming the default path should activate the first tab
+        return True, False, False, False
+    return pathname == "/tag-manager", pathname == "/alert-manager", pathname == "/contract-manager", pathname == "/settings", 
 
 
 
@@ -150,22 +205,6 @@ def toggle_sidebar(n, sidebar_state):
 
 
 
-### Manage Tab Selections
-@app.callback(
-    [Output('tab-1-link', 'active'),
-     Output('tab-2-link', 'active'),
-     Output('tab-3-link', 'active'),
-     Output('tab-4-link', 'active')],
-    [Input('url', 'pathname')]
-)
-def set_active_tab(pathname):
-    if pathname == "/":
-        # Assuming the default path should activate the first tab
-        return True, False, False, False
-    return pathname == "/tag-manager", pathname == "/alert-manager", pathname == "/contract-manager", pathname == "/settings", 
-
-
-
 # Callback to update the content based on tab selection
 @app.callback(
     Output('tab-content', 'children'),
@@ -173,21 +212,117 @@ def set_active_tab(pathname):
 )
 def render_page_content(pathname):
 
-    ## TO DO: Add authentication screen
-    ## Can one of these be called from an LLM to create visuals???
-
     if pathname == "/tag-manager":
-        return render_tagging_advisor_page()
+
+        ## TO DO: Add authentication screen
+        ## Can one of these be called from an LLM to create visuals???
+
+        #tag_advisor_manager.get_base_tag_page_filter_defaults()
+        df_date_min_filter, df_date_max_filter, current_date_filter, day_30_rolling_filter, df_product_cat_filter, df_cluster_id_filter, df_job_id_filter = cached_get_base_tag_page_filter_defaults()
+        #tag_advisor_manager.get_tag_filters()
+        compute_tag_keys_filter, tag_policy_filter, tag_key_filter, tag_value_filter = cached_get_tag_filters()
+
+        ## Tag Poligies AG Grid DF
+        # tag_advisor_manager.get_tag_policies_grid_data()
+        ## Do not cache these, they are live edits
+        tag_policies_grid_df = tag_advisor_manager.get_tag_policies_grid_data()
+        #tag_advisor_manager.get_compute_tagged_grid_data()
+        compute_tagged_grid_df = tag_advisor_manager.get_compute_tagged_grid_data()
+
+        ##
+        adhoc_clusters_grid_df = cached_get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+        jobs_clusters_grid_df = cached_get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+        sql_clusters_grid_df = cached_get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+
+        #### Load Defaults for Tag Manager
+        ### TO DO: - Cache these bois
+
+        ## Load AG Grids with Initial Conditions
+        return  render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
+                                current_date_filter = current_date_filter, 
+                                day_30_rolling_filter = day_30_rolling_filter,
+                                df_product_cat_filter = df_product_cat_filter,
+                                df_cluster_id_filter = df_cluster_id_filter,
+                                df_job_id_filter = df_job_id_filter,
+                                compute_tag_keys_filter= compute_tag_keys_filter, 
+                                tag_policy_filter=tag_policy_filter, 
+                                tag_key_filter=tag_key_filter, 
+                                tag_value_filter=tag_value_filter,
+                                ## Initial Condition Data Frames
+                                tag_policies_grid_df = tag_policies_grid_df,
+                                compute_tagged_grid_df = compute_tagged_grid_df,
+                                adhoc_clusters_grid_df = adhoc_clusters_grid_df,
+                                jobs_clusters_grid_df = jobs_clusters_grid_df,
+                                sql_clusters_grid_df = sql_clusters_grid_df,
+                                DEFAULT_TOP_N = DEFAULT_TOP_N
+                                )
+    
     elif pathname == "/alert-manager":
-        return render_alert_manager_page()
+        return  render_alert_manager_page()
     elif pathname == "/contract-manager":
         return render_contract_manager_page()
     elif pathname == "/settings":
         return render_settings_page()
     else:
-        return render_tagging_advisor_page()
+        return render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
+                                current_date_filter = current_date_filter, 
+                                day_30_rolling_filter = day_30_rolling_filter,
+                                df_product_cat_filter = df_product_cat_filter,
+                                df_cluster_id_filter = df_cluster_id_filter,
+                                df_job_id_filter = df_job_id_filter,
+                                compute_tag_keys_filter= compute_tag_keys_filter, 
+                                tag_policy_filter=tag_policy_filter, 
+                                tag_key_filter=tag_key_filter, 
+                                tag_value_filter=tag_value_filter,
+                                ## Initial Condition Data Frames
+                                tag_policies_grid_df = tag_policies_grid_df,
+                                compute_tagged_grid_df = compute_tagged_grid_df,
+                                adhoc_clusters_grid_df = adhoc_clusters_grid_df,
+                                jobs_clusters_grid_df = jobs_clusters_grid_df,
+                                sql_clusters_grid_df = sql_clusters_grid_df,
+                                DEFAULT_TOP_N = DEFAULT_TOP_N
+                                )
 
 
+@app.callback(
+    Output("refresh-mv-output", "children"),
+    Output("update-schedule-output", "children"),
+    Input("set-mv-schedule", "n_clicks"),
+    Input("refresh-mv", "n_clicks"),
+    State("mv-cron-schedule", "value"),
+    prevent_initial_call=True
+)
+def handle_mv_actions(set_mv_clicks, refresh_mv_clicks, cron_schedule):
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        # No button has been clicked yet
+        return "", ""
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if button_id == "set-mv-schedule" and cron_schedule:
+        # Setting the materialized view schedule
+        result = setting_manager.set_materialized_view_schedule(cron_schedule=cron_schedule)
+        return "", result 
+
+    elif button_id == "refresh-mv":
+        # Refreshing the materialized view
+        result = setting_manager.refresh_materialized_view()
+        return result, "" 
+
+    return "", "" 
+
+@app.callback(
+    Output("cache-clear-output", "children"),
+    Input("clear-cache-button", "n_clicks"),
+    prevent_initial_call=True  # Prevents the callback from running upon loading the app
+)
+def clear_cache(n_clicks):
+    if n_clicks:
+        cache.clear()
+        return "Cache has been cleared successfully!"
+    return ""  # This will not actually run because of `prevent_initial_call`
 
 ##### Update Usage Chart
 
@@ -200,6 +335,7 @@ def render_page_content(pathname):
     Output('usage-heatmap', 'figure'),
     Output('percent-match-ind', 'figure'),
     Output('total-usage-ind', 'figure'),
+    Output('usage-by-tag-value-line-chart', 'figure'),
     Input('update-params-button', 'n_clicks'),
     State('tag-filter-dropdown', 'value'),
     State('start-date-picker', 'date'),
@@ -208,9 +344,12 @@ def render_page_content(pathname):
     State('tag-policy-dropdown', 'value'), ## Tuple
     State('tag-policy-key-dropdown', 'value'), ## Tuple
     State('tag-policy-value-dropdown', 'value'), ## Tuple
+    State('compute-tag-filter-dropdown', 'value') ## Tuple
 )
-def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_category, tag_policies, tag_keys, tag_values):
+def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_category, tag_policies, tag_keys, tag_values, compute_tag_keys):
 
+
+        
     # Define the color mapping for compliance
     color_map = {
         'In Policy': '#097969',
@@ -218,13 +357,14 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     }
 
     # Convert the result to a DataFrame
-    query = build_tag_query_from_params(tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=AGG_QUERY)
+    usage_by_match_bar_query = build_tag_query_from_params(tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, final_agg_query=AGG_QUERY)
+
     # Convert the result to a DataFrame
-    df = system_query_manager.execute_query_to_df(query)
+    usage_by_match_bar_df = cached_execute_query_to_df(usage_by_match_bar_query)
 
     # Create a Plotly Express line chart
-    fig = px.bar(df, x='Usage_Date', y='Usage Amount', 
-                    title='Daily Usage By Tag Policy Match',
+    fig = px.bar(usage_by_match_bar_df, x='Usage_Date', y='Usage Amount', 
+                    title= 'Daily Usage By Tag Policy Match',
                     color='Tag Match',
                     labels={'Usage Amount': 'Usage Amount', 'Usage_Date': 'Usage Date'},
                     barmode="group",
@@ -243,8 +383,8 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     
 
     #### Matched Usage Indicator
-    ind_query = build_tag_query_from_params(tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, final_agg_query=MATCHED_IND_QUERY)
-    ind_df = system_query_manager.execute_query_to_df(ind_query)
+    ind_query = build_tag_query_from_params(tag_filter=tag_filter, start_date=start_date, end_date=end_date, product_category=product_category, tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, final_agg_query=MATCHED_IND_QUERY)
+    ind_df = cached_execute_query_to_df(ind_query)
     matched_value = safe_round(ind_df['Matched Usage Amount'][0], 0)
     not_matched_value = safe_round(ind_df['Not Matched Usage Amount'][0], 0)
 
@@ -320,13 +460,21 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
 
 
     #### Usage By Tag Value Bar Chart
-    values_query = build_tag_query_from_params(
-                                               tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
-                                               product_category=product_category, 
-                                               tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
-                                               final_agg_query=TAG_VALUES_QUERY)
+    values_query_over_time = build_tag_query_from_params(
+                                            tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
+                                            product_category=product_category, 
+                                            tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
+                                            compute_tag_keys=compute_tag_keys,
+                                            final_agg_query=TAG_VALUES_OVER_TIME_QUERY)
     
-    values_df = system_query_manager.execute_query_to_df(values_query).sort_values(by='Usage Amount', ascending=True)
+    values_over_time_df = cached_execute_query_to_df(values_query_over_time)
+
+    ## 2 queries in 1, just sort on client side, lessen load on warehouse
+
+    values_df = values_over_time_df.groupby('Tag Value In Policy')['Usage Amount'].sum().reset_index().sort_values(by='Usage Amount', ascending=True)
+
+    #print(values_df)
+    ##system_query_manager.execute_query_to_df(values_query).sort_values(by='Usage Amount', ascending=True)
 
     ## Color Gradient
 
@@ -356,14 +504,54 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     tag_values_bar.update_layout(xaxis_type = "log")
 
 
+    ##### Usage By Values Over Time Query
+    
+    # Define the color scale
+    tag_values_color_scale = px.colors.qualitative.Plotly[:len(values_over_time_df['Tag Value In Policy'].unique())]
+    # Find the index of the category 'B' and replace its corresponding color with grey
+
+
+    # Find the index of the category 'B' if it exists
+    category = 'Not In Policy'
+    if category in values_over_time_df['Tag Value In Policy'].unique():
+        tag_value_category_index = values_over_time_df['Tag Value In Policy'].unique().tolist().index('Not In Policy')
+        if tag_value_category_index < len(tag_values_color_scale):
+            tag_values_color_scale[tag_value_category_index] = 'grey'
+
+
+    values_over_time_fig = px.bar(
+        values_over_time_df,
+        x='Usage Date',
+        y='Usage Amount',
+        title='Usage Over Time By Tag Value',
+        color='Tag Value In Policy',
+        labels={'Usage Amount': 'Usage Amount', 'Usage_Date': 'Usage Date'},
+        barmode='stack',  # Stacked bar chart
+        #color_discrete_map=tag_values_color_scale,
+        color_continuous_scale='Ocean'
+    )
+
+    
+    values_over_time_fig.update_layout(ChartFormats.common_chart_layout())
+    values_over_time_fig.update_layout(
+            legend=dict(
+                x=0,
+                y=-0.3,  # You may need to adjust this depending on your specific plot configuration
+                orientation="h"  # Horizontal legend
+            )
+        )
+
+
+
     #### Tags By SKU Heatmap
     heat_map_query = build_tag_query_from_params(
-                                               tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
-                                               product_category=product_category, 
-                                               tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
-                                               final_agg_query=HEATMAP_QUERY)
+                                            tag_filter=tag_filter, start_date=start_date, end_date=end_date, 
+                                            product_category=product_category, 
+                                            tag_policies=tag_policies, tag_keys=tag_keys, tag_values=tag_values, 
+                                            compute_tag_keys=compute_tag_keys,
+                                            final_agg_query=HEATMAP_QUERY)
     
-    heat_map_df = system_query_manager.execute_query_to_df(heat_map_query).sort_values(by='Usage Amount', ascending=True) 
+    heat_map_df = cached_execute_query_to_df(heat_map_query).sort_values(by='Usage Amount', ascending=True) 
     heat_pivot = heat_map_df.pivot_table(values='Usage Amount', index='Tag', columns='Product', fill_value=0)
     #heat_pivot['Total'] = heat_pivot.sum(axis=1)
 
@@ -381,11 +569,11 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
     ]
 
     heat_map_fig = go.Figure(data=go.Heatmap(
-                   z=heat_pivot.values,  # Provide the values from the pivot table
-                   x=heat_pivot.columns,  # Set the x-axis to Product names
-                   y=heat_pivot.index,    # Set the y-axis to Tag names
-                   colorscale=heat_colors_gradient,
-                   hoverongaps = False))
+                z=heat_pivot.values,  # Provide the values from the pivot table
+                x=heat_pivot.columns,  # Set the x-axis to Product names
+                y=heat_pivot.index,    # Set the y-axis to Tag names
+                colorscale=heat_colors_gradient,
+                hoverongaps = False))
 
 
     heat_map_fig.update_layout(
@@ -396,7 +584,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
 
     heat_map_fig.update_layout(ChartFormats.common_chart_layout())
 
-    return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig, percent_match_fig, total_usage_fig
+    return fig, matched_fig, unmatched_fig, tag_values_bar, heat_map_fig, percent_match_fig, total_usage_fig, values_over_time_fig
 
 ##### AG Grid Callbacks
 
@@ -476,27 +664,31 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
         # Fetch distinct tag policy names within the context manager
         with QueryManager.session_scope(system_engine) as session:
 
-            distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
-            distinct_tag_keys = pd.read_sql(text("""
-                                    SELECT tag_key FROM main.dash_observability_advisor.app_tag_policies
-                                    QUALIFY ROW_NUMBER() OVER (PARTITION BY tag_key ORDER BY update_timestamp DESC) = 1"""), con=system_engine)
-            distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
+            ## 1 Query Instead of 3
+            tag_policy_result = session.query(TagPolicies.tag_policy_name, TagPolicies.tag_key, TagPolicies.tag_value).all()
 
-            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
-            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
-            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
-            
-            print(f"NEW TAG KEYS DELETE INNER LOOP: {tag_key_filter}")
+            # Process the query result and store the distinct values in variables in your Dash app
+            distinct_tag_policy_names = set()
+            distinct_tag_keys = set()
+            distinct_tag_values = set()
 
-        ## DEBUG
-        print(f"NEW TAG DELETEKEYSSS: {tag_key_filter}")
+            for row in tag_policy_result:
+                distinct_tag_policy_names.add(row.tag_policy_name)
+                distinct_tag_keys.add(row.tag_key)
+                if row.tag_value is not None:
+                    distinct_tag_values.add(row.tag_value)
 
-        return updated_row_data, get_tag_policies_grid_data().to_dict('records'), dash.no_update, dash.no_update, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter, get_adhoc_ag_grid_column_defs(tag_key_filter), tag_key_filter
+            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policy_names]
+            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys]
+            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values]
+
+
+        return updated_row_data, tag_advisor_manager.get_tag_policies_grid_data().to_dict('records'), dash.no_update, dash.no_update, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter, tag_advisor_manager.get_adhoc_ag_grid_column_defs(tag_key_filter), tag_key_filter
 
     ##### Handle Clear Button Press
     elif triggered_id == 'tag-policy-clear-btn' and clear_clicks:
         clear_loading_content = html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
-        return [], get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, dash.no_update, clear_loading_content, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update # Clear changes and reload data
+        return [], tag_advisor_manager.get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, dash.no_update, clear_loading_content, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update # Clear changes and reload data
     
     
     ##### Handle cell change
@@ -585,23 +777,28 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
         else:
             pass
             
-         # Fetch distinct tag policy names within the context manager
         with QueryManager.session_scope(system_engine) as session:
 
-            distinct_tag_policies = pd.read_sql(session.query(TagPolicies.tag_policy_name).distinct().statement, con=system_engine)
-            distinct_tag_keys = pd.read_sql(text("""
-                                    SELECT tag_key FROM main.dash_observability_advisor.app_tag_policies
-                                    QUALIFY ROW_NUMBER() OVER (PARTITION BY tag_key ORDER BY update_timestamp DESC) = 1
-                                                 """), con=system_engine)
-            distinct_tag_values = pd.read_sql(session.query(TagPolicies.tag_value).distinct().statement, con=system_engine)
+            ## 1 Query Instead of 3
+            tag_policy_result = session.query(TagPolicies.tag_policy_name, TagPolicies.tag_key, TagPolicies.tag_value).all()
 
-            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policies['tag_policy_name']]
-            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys['tag_key']]
-            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values['tag_value']]
+            # Process the query result and store the distinct values in variables in your Dash app
+            distinct_tag_policy_names = set()
+            distinct_tag_keys = set()
+            distinct_tag_values = set()
 
-    
-            return [], get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter, get_adhoc_ag_grid_column_defs(tag_key_filter), tag_key_filter
-        
+            for row in tag_policy_result:
+                distinct_tag_policy_names.add(row.tag_policy_name)
+                distinct_tag_keys.add(row.tag_key)
+                if row.tag_value is not None:
+                    distinct_tag_values.add(row.tag_value)
+
+            tag_policy_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_policy_names]
+            tag_key_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_keys]
+            tag_value_filter = [{'label': name if name is not None else 'None', 'value': name if name is not None else 'None'} for name in distinct_tag_values]
+
+            return [], tag_advisor_manager.get_tag_policies_grid_data().to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, tag_policy_filter, tag_key_filter, tag_value_filter, get_adhoc_ag_grid_column_defs(tag_key_filter), tag_key_filter
+
 
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update  # No action taken
 
@@ -618,23 +815,26 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
      Output('loading-clear-adhoc-usage', 'children'),
      Output('save-adhoc-trigger', 'children')],
     ## Also need to update all filters and visuals? Or let the button to do? with the "Refresh Button"
-   [Input('start-date-picker', 'date'),
-    Input('end-date-picker', 'date'),
-    Input('tag-filter-dropdown', 'value'),
-    Input('tag-policy-dropdown', 'value'),
-    Input('tag-policy-key-dropdown', 'value'),
-    Input('tag-policy-value-dropdown', 'value'),
+    Input('update-params-button', 'n_clicks'),
+    State('start-date-picker', 'date'),
+    State('end-date-picker', 'date'),
+    State('tag-filter-dropdown', 'value'),
+    State('product-category-dropdown', 'value'), ## Tuple
+    State('tag-policy-dropdown', 'value'), ## Tuple
+    State('tag-policy-key-dropdown', 'value'), ## Tuple
+    State('tag-policy-value-dropdown', 'value'), ## Tuple
+    State('compute-tag-filter-dropdown', 'value'), ## Tuple
     ### Actual AG Grid State
     Input('usage-adhoc-save-btn', 'n_clicks'), 
      Input('usage-adhoc-clear-btn', 'n_clicks'),
      Input('adhoc-usage-ag-grid', 'cellValueChanged'),
-     Input('top-n-adhoc', 'value')],
-    [State('adhoc-usage-ag-grid', 'rowData'),
+     Input('top-n-adhoc', 'value'),
+    State('adhoc-usage-ag-grid', 'rowData'),
      State('adhoc-ag-grid-store', 'data'),
      State('adhoc-ag-grid-original-data', 'data'),
-     State('adhoc-usage-ag-grid', 'selectedRows')]
+     State('adhoc-usage-ag-grid', 'selectedRows')
 )
-def update_adhoc_grid_data(start_date, end_date, tag_filter, tag_policies, tag_keys, tag_values, 
+def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_category, tag_policies, tag_keys, tag_values, compute_tag_keys,
                            save_clicks, clear_clicks, cell_change, top_n,
                            row_data, changes, original_data, selected_rows):
 
@@ -645,15 +845,19 @@ def update_adhoc_grid_data(start_date, end_date, tag_filter, tag_policies, tag_k
 
 
     ##### Handle Changes to top N filter
-    if triggered_id == 'top-n-adhoc' and top_n:
+    ### If the refresh button gets clicked, refresh the AG Grids
+    print(f"NUM CLICKS: {n_clicks}")
+    if (triggered_id == 'top-n-adhoc' and top_n) or (n_clicks > 0):
        
-       updated_data = get_adhoc_clusters_grid_data(
+       updated_data = tag_advisor_manager.get_adhoc_clusters_grid_data(
         start_date=start_date,
         end_date=end_date,
         tag_filter=tag_filter,
+        product_category = product_category,
         tag_policies=tag_policies,
         tag_keys=tag_keys,
         tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
         top_n=top_n
         )
        
@@ -775,23 +979,26 @@ def update_adhoc_grid_data(start_date, end_date, tag_filter, tag_policies, tag_k
      Output('loading-clear-jobs-usage', 'children'),
      Output('save-jobs-trigger', 'children')],
     ## Also need to update all filters and visuals? Or let the button to do? with the "Refresh Button"
-   [Input('start-date-picker', 'date'),
-    Input('end-date-picker', 'date'),
-    Input('tag-filter-dropdown', 'value'),
-    Input('tag-policy-dropdown', 'value'),
-    Input('tag-policy-key-dropdown', 'value'),
-    Input('tag-policy-value-dropdown', 'value'),
+    Input('update-params-button', 'n_clicks'),
+    State('start-date-picker', 'date'),
+    State('end-date-picker', 'date'),
+    State('tag-filter-dropdown', 'value'),
+    State('product-category-dropdown', 'value'), ## Tuple
+    State('tag-policy-dropdown', 'value'), ## Tuple
+    State('tag-policy-key-dropdown', 'value'), ## Tuple
+    State('tag-policy-value-dropdown', 'value'), ## Tuple
+    State('compute-tag-filter-dropdown', 'value'), ## Tuple
     ### Actual AG Grid State
     Input('usage-jobs-save-btn', 'n_clicks'), 
      Input('usage-jobs-clear-btn', 'n_clicks'),
      Input('jobs-usage-ag-grid', 'cellValueChanged'),
-     Input('top-n-jobs', 'value')], 
-    [State('jobs-usage-ag-grid', 'rowData'),
+     Input('top-n-jobs', 'value'), 
+    State('jobs-usage-ag-grid', 'rowData'),
      State('jobs-ag-grid-store', 'data'),
      State('jobs-ag-grid-original-data', 'data'),
-     State('jobs-usage-ag-grid', 'selectedRows')]
+     State('jobs-usage-ag-grid', 'selectedRows')
 )
-def update_jobs_grid_data(start_date, end_date, tag_filter, tag_policies, tag_keys, tag_values, 
+def update_jobs_grid_data(n_clicks, start_date, end_date, tag_filter, product_category, tag_policies, tag_keys, tag_values, compute_tag_keys,
                            save_clicks, clear_clicks, cell_change, top_n,
                            row_data, changes, original_data, selected_rows):
 
@@ -802,15 +1009,17 @@ def update_jobs_grid_data(start_date, end_date, tag_filter, tag_policies, tag_ke
 
 
     ##### Handle Changes to top N filter
-    if triggered_id == 'top-n-jobs' and top_n:
+    if (triggered_id == 'top-n-jobs' and top_n) or (n_clicks > 0):
        
-       updated_data = get_jobs_clusters_grid_data(
+       updated_data = tag_advisor_manager.get_jobs_clusters_grid_data(
         start_date=start_date,
         end_date=end_date,
         tag_filter=tag_filter,
+        product_category = product_category,
         tag_policies=tag_policies,
         tag_keys=tag_keys,
         tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
         top_n=top_n
         )
        
@@ -934,23 +1143,26 @@ def update_jobs_grid_data(start_date, end_date, tag_filter, tag_policies, tag_ke
      Output('loading-clear-sql-usage', 'children'),
      Output('save-sql-trigger', 'children')],
     ## Also need to update all filters and visuals? Or let the button to do? with the "Refresh Button"
-   [Input('start-date-picker', 'date'),
-    Input('end-date-picker', 'date'),
-    Input('tag-filter-dropdown', 'value'),
-    Input('tag-policy-dropdown', 'value'),
-    Input('tag-policy-key-dropdown', 'value'),
-    Input('tag-policy-value-dropdown', 'value'),
+    Input('update-params-button', 'n_clicks'),
+    State('start-date-picker', 'date'),
+    State('end-date-picker', 'date'),
+    State('tag-filter-dropdown', 'value'),
+    State('product-category-dropdown', 'value'), ## Tuple
+    State('tag-policy-dropdown', 'value'), ## Tuple
+    State('tag-policy-key-dropdown', 'value'), ## Tuple
+    State('tag-policy-value-dropdown', 'value'), ## Tuple
+    State('compute-tag-filter-dropdown', 'value'), ## Tuple
     ### Actual AG Grid State
     Input('usage-sql-save-btn', 'n_clicks'), 
      Input('usage-sql-clear-btn', 'n_clicks'),
      Input('sql-usage-ag-grid', 'cellValueChanged'),
-     Input('top-n-sql', 'value')], 
+     Input('top-n-sql', 'value'), 
     [State('sql-usage-ag-grid', 'rowData'),
      State('sql-ag-grid-store', 'data'),
      State('sql-ag-grid-original-data', 'data'),
      State('sql-usage-ag-grid', 'selectedRows')]
 )
-def update_sql_grid_data(start_date, end_date, tag_filter, tag_policies, tag_keys, tag_values, 
+def update_sql_grid_data(n_clicks, start_date, end_date, tag_filter, product_category, tag_policies, tag_keys, tag_values, compute_tag_keys,
                            save_clicks, clear_clicks, cell_change, top_n,
                            row_data, changes, original_data, selected_rows):
 
@@ -961,15 +1173,17 @@ def update_sql_grid_data(start_date, end_date, tag_filter, tag_policies, tag_key
 
 
     ##### Handle Changes to top N filter
-    if triggered_id == 'top-n-sql' and top_n:
+    if (triggered_id == 'top-n-sql' and top_n) or (n_clicks > 0):
        
-       updated_data = get_sql_clusters_grid_data(
+       updated_data = tag_advisor_manager.get_sql_clusters_grid_data(
         start_date=start_date,
         end_date=end_date,
-        tag_filter=tag_filter,
+        product_category = product_category,
+        tag_filter = tag_filter,
         tag_policies=tag_policies,
         tag_keys=tag_keys,
         tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
         top_n=top_n
         )
        
@@ -1247,7 +1461,7 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
         else:
             pass
 
-        updated_data_after_save = get_compute_tagged_grid_data().to_dict('records')
+        updated_data_after_save = tag_advisor_manager.get_compute_tagged_grid_data().to_dict('records')
             
         return [], updated_data_after_save, {'display': 'none'}, save_loading_content, dash.no_update, dash.no_update, 'tag_save_triggered'
         
@@ -1267,9 +1481,10 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
      [State('cluster-tag-rowData-store', 'data')]
 )
 def update_tag_compute_ag_grid(adhoc, jobs, sql, tags, reloadTrigger, rowData):
+
     if adhoc or jobs or sql:
         # Logic to fetch or compute new rowData for 'tag-compute-ag-grid'
-        updated_data = get_compute_tagged_grid_data().to_dict('records')
+        updated_data = tag_advisor_manager.get_compute_tagged_grid_data().to_dict('records')
         return updated_data
     
     if tags:
@@ -1278,7 +1493,7 @@ def update_tag_compute_ag_grid(adhoc, jobs, sql, tags, reloadTrigger, rowData):
         return current_state
     
     if reloadTrigger:
-        return get_compute_tagged_grid_data().to_dict('records')
+        return tag_advisor_manager.get_compute_tagged_grid_data().to_dict('records')
 
     
     return dash.no_update

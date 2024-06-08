@@ -7,3 +7,5 @@ dash-canvas
 sqlalchemy
 dash_bootstrap_components
 python-dotenv
+pandasql
+flask_caching

@@ -14,6 +14,17 @@ from data_functions.backend_database import (
 
 
 def render_alert_manager_page():
-    return html.P("Welcome to the Alert Manager Page.")
+    return dbc.Container([
+        dbc.Row([
+                dbc.Col([
+                    html.H1("Alert Manager", style={'color': '#002147'}),  # A specific shade of blue
+                ], width=12),
+        ]),
+        dbc.Row([
+                dbc.Col([
+                ], width=12),
+        ])
+    ]
+    , fluid=True)
 
 

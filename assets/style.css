@@ -92,6 +92,28 @@ html, body, .app-container {
     border: 1px solid #002147;  /* Dark navy blue */
 }
 
+
+.prettier-button-warn {
+    background-color: white; /* White background on hover */
+    color: #002147; /* Dark blue text on hover */
+    border: 3px solid #cf1d05;  /* Dark navy blue */
+    font-size: 16px;
+    padding: 8px 16px;
+    margin-top: 10px;
+}
+
+.prettier-button-warn:hover {
+    background-color: #f4a111;
+    color: white;
+    border: 1px solid white;  /* Dark navy blue */
+}
+
+.prettier-button-warn:active {
+    background-color: #f64905; /* Deep purple background when clicked */
+    color: white; /* Keep text white when active */
+    border: 1px solid #002147;  /* Dark navy blue */
+}
+
 .label-container {
     margin-bottom: 5px;
     display: block;
