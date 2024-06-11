@@ -5,13 +5,11 @@ Date: 5/25/2024
 Description: Dash Apps for Tagging and Data Compute Observability
 
 TO DO: 
-1. Add databricsk SDK for authentication and iteraction with db
+1. ALERTS PAGE: When deleting an alert, should use Databricks SDK to delete the related job/query/alert_id as well. 
 6. Create settings page that lets a user input the workspace name and select the warehouse to execute against. (OAuth)
 7. Create LLM to generate visuals for system tables upon request / Alerts
-8. Add Top N filter with default 100 for Usage Grids
 9. Need to add Warehouse Name and owner once Warehouses system tables is available
-10. Add ability to filter by actual tag key / value from the usage - this helps apply policies to subsets of tags as well
-
+10. Automatically incrementally create query/alert/job for a given alert, even for partial saves so that you dont create dups
 
 BUGS: 
 1. Make filters update based on other selected filter values
@@ -28,6 +26,7 @@ from dotenv import load_dotenv
 from page_functions import *
 from data_functions import *
 from chart_functions import ChartFormats
+from agent_functions import (create_alert_and_job, delete_alert_and_job, parse_query_result_json_from_string)
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
@@ -37,6 +36,8 @@ from threading import Thread
 from data_functions.utils import *
 from pandasql import sqldf
 from flask_caching import Cache
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service import sql, jobs
 from datetime import date, datetime, time, timedelta, timezone
 
 
@@ -60,14 +61,24 @@ access_token = os.getenv("DATABRICKS_TOKEN")
 catalog = os.getenv("DATABRICKS_CATALOG")
 schema = os.getenv("DATABRICKS_SCHEMA")
 
-DEFAULT_TOP_N = 100
+## Get Warehouse Id from http_path
+last_slash_index = http_path.rfind('/')
+warehouse_id = http_path[last_slash_index + 1:] if last_slash_index != -1 else http_path
+
+
 ## Load Visual Specific Query Parts
 AGG_QUERY = read_sql_file("./config/tagging_advisor/tag_date_agg_query.sql")
 MATCHED_IND_QUERY = read_sql_file("./config/tagging_advisor/matched_indicator_query.sql")
 TAG_VALUES_QUERY = read_sql_file("./config/tagging_advisor/tag_values_query.sql")
 HEATMAP_QUERY = read_sql_file("./config/tagging_advisor/tag_sku_heatmap_query.sql")
 TAG_VALUES_OVER_TIME_QUERY = read_sql_file("./config/tagging_advisor/tag_values_over_time.sql")
+DEFAULT_TOP_N = 100
 
+### Client for interacting with all of Databricks outside of submitting SQL commands
+dbx_client = WorkspaceClient(
+        host=host,
+        token = access_token
+    )
 
 ###########  Initialize the Dash app with a Bootstrap theme ###########
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -81,6 +92,7 @@ system_engine = system_query_manager.get_engine()
 ### Functions to process data for these tabs
 tag_advisor_manager = TagAdvisorPageManager(system_query_manager=system_query_manager)
 setting_manager = SettingsPageManager(system_query_manager=system_query_manager)
+alerts_manager = AlertsManager(system_query_manager=system_query_manager)
 
 
 ##### Initialize Cache for Data Functions
@@ -131,18 +143,43 @@ def cached_get_sql_clusters_grid_data(start_date, end_date, tag_filter=None, tag
 ## Create Data Model and MV App Is Based On
 tag_advisor_manager.run_init_scripts()
 
+
+### Init Load
+
+#tag_advisor_manager.get_base_tag_page_filter_defaults()
+df_date_min_filter, df_date_max_filter, current_date_filter, day_30_rolling_filter, df_product_cat_filter, df_cluster_id_filter, df_job_id_filter = cached_get_base_tag_page_filter_defaults()
+#tag_advisor_manager.get_tag_filters()
+compute_tag_keys_filter, tag_policy_filter, tag_key_filter, tag_value_filter = cached_get_tag_filters()
+
+## Tag Poligies AG Grid DF
+# tag_advisor_manager.get_tag_policies_grid_data()
+## Do not cache these, they are live edits
+tag_policies_grid_df = tag_advisor_manager.get_tag_policies_grid_data()
+#tag_advisor_manager.get_compute_tagged_grid_data()
+compute_tagged_grid_df = tag_advisor_manager.get_compute_tagged_grid_data()
+alerts_ag_grid_data = alerts_manager.get_alerts_ag_grid_data()
+
+##
+adhoc_clusters_grid_df = cached_get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+jobs_clusters_grid_df = cached_get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+sql_clusters_grid_df = cached_get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
+
+#### Load Defaults for Tag Manager
+### TO DO: - Cache these bois
+
+
 # Define the layout of the main app
 
 app.layout = dbc.Container([
     dcc.Store(id='sidebar-state', data={'is_open': True}),
     dbc.Row([
         dbc.Col([
-            dbc.Button("☰", id="toggle-button", n_clicks=0, className='toggle-button'),
-            dbc.Collapse(
-                dbc.Nav(
+                dbc.Container(
+                    dbc.Nav(
                     [
+                        dbc.Button("☰", id="toggle-button", n_clicks=0, className='toggle-button'),
                         html.Div([  # Container for the logo and possibly other header elements
-                            html.Img(id='sidebar-logo', src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto'}),
+                            html.Img(id='sidebar-logo', src='/assets/app_logo.png', style={'width': '100%', 'height': 'auto', 'padding': '0px'}),
                         ]),
                         dbc.NavLink("Tags", href="/tag-manager", id="tab-1-link", active='exact'),
                         dbc.NavLink("Alerts", href="/alert-manager", id="tab-2-link", active='exact'),
@@ -151,18 +188,16 @@ app.layout = dbc.Container([
                     ],
                     vertical=True,
                     pills=True,
-                    className="sidebar"
-                ),
-                id="sidebar",
-                is_open=True,
-            )
-        ], width={"size": 1, "offset": 0}, id="sidebar-col", className="sidebar-col"),
+                    className="sidebar",
+                    id='sidebar'
+                ), fluid=True)
+        ], width=2, id="sidebar-col", className="sidebar-col"),
         dbc.Col([
             dcc.Location(id='url', refresh=False),
             dbc.Container(id='tab-content', className="main-content", fluid=True)
-        ], id="main-content-col", width=11)
+        ], id="main-content-col", width=10)
     ])
-], fluid=True, className="app-container")
+], className="app-container", fluid=True)
 
 
 
@@ -183,11 +218,10 @@ def set_active_tab(pathname):
 
 
 @app.callback(
-    [Output("sidebar", "is_open"),
+    [
      Output("sidebar-col", "width"),
      Output("main-content-col", "width"),
      Output("toggle-button", "children"),
-     Output("sidebar-logo", "style"),
      Output("sidebar-state", "data")],
     [Input("toggle-button", "n_clicks")],
     [State("sidebar-state", "data")]
@@ -196,12 +230,12 @@ def toggle_sidebar(n, sidebar_state):
     if n:
         is_open = not sidebar_state['is_open']
         sidebar_state['is_open'] = is_open
-        sidebar_width = 1 if is_open else 0
-        main_content_width = 11 if is_open else 12
+        sidebar_width = 2 if is_open else 1
+        main_content_width = 10 if is_open else 11
         button_text = "☰" if is_open else "☰"
-        logo_style = {'width': '100%', 'height': 'auto'} if is_open else {'display': 'none'}
-        return is_open, {"size": sidebar_width, "offset": 0}, main_content_width, button_text, logo_style, sidebar_state
-    return sidebar_state['is_open'], {"size": 1, "offset": 0}, 11, "☰", {'width': '100%', 'height': 'auto'}, sidebar_state
+        logo_style = {'width': '100%', 'height': 'auto'} #if is_open else {'display': 'none'}
+        return sidebar_width, main_content_width, button_text, sidebar_state
+    return 2, 10, "☰" , sidebar_state
 
 
 
@@ -216,26 +250,6 @@ def render_page_content(pathname):
 
         ## TO DO: Add authentication screen
         ## Can one of these be called from an LLM to create visuals???
-
-        #tag_advisor_manager.get_base_tag_page_filter_defaults()
-        df_date_min_filter, df_date_max_filter, current_date_filter, day_30_rolling_filter, df_product_cat_filter, df_cluster_id_filter, df_job_id_filter = cached_get_base_tag_page_filter_defaults()
-        #tag_advisor_manager.get_tag_filters()
-        compute_tag_keys_filter, tag_policy_filter, tag_key_filter, tag_value_filter = cached_get_tag_filters()
-
-        ## Tag Poligies AG Grid DF
-        # tag_advisor_manager.get_tag_policies_grid_data()
-        ## Do not cache these, they are live edits
-        tag_policies_grid_df = tag_advisor_manager.get_tag_policies_grid_data()
-        #tag_advisor_manager.get_compute_tagged_grid_data()
-        compute_tagged_grid_df = tag_advisor_manager.get_compute_tagged_grid_data()
-
-        ##
-        adhoc_clusters_grid_df = cached_get_adhoc_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
-        jobs_clusters_grid_df = cached_get_jobs_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
-        sql_clusters_grid_df = cached_get_sql_clusters_grid_data(start_date=day_30_rolling_filter, end_date=current_date_filter, top_n=DEFAULT_TOP_N)
-
-        #### Load Defaults for Tag Manager
-        ### TO DO: - Cache these bois
 
         ## Load AG Grids with Initial Conditions
         return  render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
@@ -258,7 +272,7 @@ def render_page_content(pathname):
                                 )
     
     elif pathname == "/alert-manager":
-        return  render_alert_manager_page()
+        return  render_alert_manager_page(alerts_ag_grid_data = alerts_ag_grid_data)
     elif pathname == "/contract-manager":
         return render_contract_manager_page()
     elif pathname == "/settings":
@@ -394,8 +408,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             mode="number",
                             value=safe_divide(matched_value, safe_add(matched_value, not_matched_value)) ,
                             title={"text": "% Matched Usage", 'font': {'size': 24}},
-                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': ',.1%'},
-                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': ',.1%'}
                             ))
     
     percent_match_fig.update_layout(
@@ -409,8 +422,7 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             mode="number",
                             value=safe_round(safe_add(matched_value, not_matched_value), 1) ,
                             title={"text": "Total Usage", 'font': {'size': 24}},
-                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': '$,'},
-                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            number={'font': {'size': 42, 'color': "#097969"}, 'valueformat': '$,'}
                             ))
     
     total_usage_fig.update_layout(
@@ -429,33 +441,33 @@ def update_usage_by_match(n_clicks, tag_filter, start_date, end_date, product_ca
                             'bar': {'color': "#097969"},
                             'bgcolor': "white",
                             'borderwidth': 2,
-                            'bordercolor': "#002147"},
-                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            'bordercolor': "#002147"}
                             ))
     
     matched_fig.update_layout(
         height=180,
-        margin=dict(l=10, r=10, t=50, b=10)
+        autosize=True,
+        margin=dict(l=10, r=10, t=60, b=10)
     )
 
     #### Not Matched Usage Indicator
     unmatched_fig = go.Figure(go.Indicator(
                             mode="number+gauge",
                             value=not_matched_value,
-                            title={"text": "Not Matched Usage", 'font': {'size': 24}},
+                            title={"text": "Not Matched Usage", 'font': {'size': 24}, 'align': 'center'},
                             number={'font': {'size': 24, 'color': '#8B0000'}, 'valueformat': '$,'},
                             gauge={'shape': "angular",
                             'axis': {'range': [0, matched_value + not_matched_value]},
                             'bar': {'color': '#8B0000'},
                             'bgcolor': "white",
                             'borderwidth': 2,
-                            'bordercolor': "#002147"},
-                            domain = {'x': [0, 1], 'y': [0, 0.9]}  # Adjust domain to fit elements
+                            'bordercolor': "#002147"}
                             ))
     
     unmatched_fig.update_layout(
         height=180,
-        margin=dict(l=10, r=10, t=50, b=10)
+        autosize=True,
+        margin=dict(l=10, r=10, t=60, b=10)
     )
 
 
@@ -826,9 +838,9 @@ def handle_policy_changes(save_clicks, clear_clicks, cell_change, add_row_clicks
     State('compute-tag-filter-dropdown', 'value'), ## Tuple
     ### Actual AG Grid State
     Input('usage-adhoc-save-btn', 'n_clicks'), 
-     Input('usage-adhoc-clear-btn', 'n_clicks'),
-     Input('adhoc-usage-ag-grid', 'cellValueChanged'),
-     Input('top-n-adhoc', 'value'),
+    Input('usage-adhoc-clear-btn', 'n_clicks'),
+    Input('adhoc-usage-ag-grid', 'cellValueChanged'),
+    Input('top-n-adhoc', 'value'),
     State('adhoc-usage-ag-grid', 'rowData'),
      State('adhoc-ag-grid-store', 'data'),
      State('adhoc-ag-grid-original-data', 'data'),
@@ -867,13 +879,17 @@ def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_c
     ##### Handle cell change
     if triggered_id == 'adhoc-usage-ag-grid' and cell_change:
 
+
         if changes is None:
             changes = []
         change_data = cell_change[0]['data']
         row_index = cell_change[0]['rowIndex']
         # Ensure the change data includes the row index
         change_data['rowIndex'] = row_index
+
+
         changes.append(change_data)
+
         row_data = mark_changed_rows(row_data, changes, row_id='rowIndex')
 
         return changes, row_data, {'display': 'block', 'color': 'yellow', 'font-weight': 'bold'}, dash.no_update, dash.no_update, dash.no_update
@@ -891,7 +907,7 @@ def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_c
     ##### SAVE CHANGES
 
     # Handle saving changes
-    if triggered_id == 'usage-adhoc-save-btn' and save_clicks:
+    if triggered_id == 'usage-adhoc-save-btn' and save_clicks and changes:
 
         # Combine changes by row index
         grouped_changes = []
@@ -959,6 +975,7 @@ def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_c
 
         ## No change, no Op
         else:
+            print(f"NOOPPPP for some reason: {changes} \n {original_data}")
             pass
             
         
@@ -1343,7 +1360,7 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
 
 
     ##### DELETES 
-     #### DELETE Handle removing selected rows
+    #### DELETE Handle removing selected rows
     
     if triggered_id == 'remove-compute-tags-row-btn' and remove_row_clicks > 0:
         ## Only attempt to delete from
@@ -1499,6 +1516,328 @@ def update_tag_compute_ag_grid(adhoc, jobs, sql, tags, reloadTrigger, rowData):
     return dash.no_update
 
 
+##### LLM Alert Manager #####
+
+@app.callback(
+    [Output('chat-history', 'data'),
+     Output('chat-output-window', 'children'),
+     Output('chat-input-box', 'value'),
+     Output('in-progress-alert', 'data')],
+    [Input('chat-submit-btn', 'n_clicks'),
+     Input('clear-context-btn', 'n_clicks')],
+    [State('chat-input-box', 'value'),
+     State('chat-history', 'data')],
+    prevent_initial_call=True
+)
+def submit_chat(chat_submit_n_clicks, clear_context_n_clicks, input_value, history):
+
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if button_id == 'clear-context-btn':
+        # Clear the chat history
+        return {'messages': []}, "Chat history cleared.", "", {'data': {'alert': {}}}
+
+    if button_id == 'chat-submit-btn' and input_value:
+        new_history = history['messages'][-4:]  # keep only the last 2 messages for rolling basis
+        new_input = """**ME**:   """+ input_value
+        new_history.append(new_input)
+        response_message = ""
+
+        # Formulate the input for AI Query
+        ### each new prompt/response combo 
+        chat_updated_input = '\n\n'.join(new_history)
+        query = text("SELECT result FROM generate_alert_info_from_prompt(:input_prompt)")
+
+        try:
+            # Assuming system_query_manager.get_engine() is predefined and correct
+            engine = system_query_manager.get_engine()
+            with engine.connect() as conn:
+                result = conn.execute(query, parameters={'input_prompt': chat_updated_input})
+                row = result.fetchone()
+                new_output = row[0]
+                if row:
+                    response_message = """**DBRX**:    """ + new_output
+                    
+                else:
+                    response_message = """**DBRX**:    """ + "No response generated."
+                new_history.append(response_message)
+
+        except Exception as e:
+            response_message = """**DBRX**:   """ + f"ERROR getting alert data: {str(e)}"
+            new_history.append(response_message)
+
+        #print(f"CONTEXT CHAIN: \n{new_history}")
+        #print(f"CURRENT OUTPUT: \n {new_output}")
+
+        parsed_updated_output = parse_query_result_json_from_string(new_output)
+        print(parsed_updated_output)
+        #print(parsed_updated_output)
+        return {'messages': new_history}, '\n\n'.join(new_history), "", {'alert': parsed_updated_output}
+
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+
+
+### Callback to fill the live alerts values
+@app.callback(
+    Output('input-alert-name', 'value'),
+    Output('input-query', 'value'),
+    Output('input-schedule', 'value'),
+    Output('input-recipients', 'value'),
+    Output('input-context-sql', 'value'),
+    Input('in-progress-alert', 'data'), 
+    prevent_initial_call=True
+)
+def update_inputs_from_store(data):
+
+    alert_data = data.get('alert', dict())
+    
+    alert_name = alert_data.get('ALERT_NAME', '')
+    query = alert_data.get('QUERY', '')
+    schedule = alert_data.get('SCHEDULE', '')
+    recipients = ', '.join(alert_data.get('RECIPIENTS', []))
+    context_sql = ', '.join(alert_data.get('CONTEXT_SQL', []))
+    
+    return alert_name, query, schedule, recipients, context_sql
+
+
+
+# ALERTS AG Grid Callback to update the Alert grid with data from the database
+@app.callback(
+    Output('alerts-grid', 'rowData'),
+    Output('save-pending-alert-loading', 'children'),
+    Output('loading-remove-alerts', 'children'),
+    Output('loading-create-jobs-alerts', 'children'),
+    ## the in progress alert store should also be cleared, so do we combine callbacks?
+    Input('save-pending-alerts-btn', 'n_clicks'),
+    Input('create-alert-jobs-btn', 'n_clicks'),
+    Input('remove-alerts-btn', 'n_clicks'),
+    State('in-progress-alert', 'data'),
+    State('alerts-grid', 'rowData'),
+    State('alerts-grid', 'selectedRows') ## Might not need a store because we are just going to delete selected rows, no adding / editing
+)
+def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks, in_progress_data, row_data, selected_rows):
+
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    action_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+
+    if action_id == 'save-pending-alerts-btn' and save_clicks > 0:
+
+        ###### Handle saves from the LLM
+        alert_data = in_progress_data.get('alert', dict())
+        
+        alert_name = alert_data.get('ALERT_NAME', None)
+        query = alert_data.get('QUERY', None)
+        schedule = alert_data.get('SCHEDULE', None)
+        recipients = ', '.join(alert_data.get('RECIPIENTS', []))
+        context_sql = ', '.join(alert_data.get('CONTEXT_SQL', []))
+
+        #### Save to SQL and return results
+
+        ### Do input validation here
+        if (len(alert_name) > 0) and (len(query)> 0): ## i.e. has pending changes
+            ## Instead of having changes from AG grid, we only have single alert changes at a given time. static parsed values
+
+
+            connection = system_query_manager.get_engine().connect()
+
+            save_pending_alerts_btn = html.Button('Save Alert', id='save-pending-alerts-btn', n_clicks=0,
+                                    className = 'prettier-button')
+
+        ### MERGE KEY IS query_text, query_name
+            try:
+
+                        # Do NOT update a record with the same name. Must manually delete it
+                        upsert_query = text("""
+                            WITH updates AS (
+                                SELECT 
+                                :alert_name AS alert_name,
+                                :alert_query AS alert_query,
+                                :alert_schedule AS alert_schedule,
+                                :alert_recipients AS alert_recipients
+                            )
+                            MERGE INTO alerts_settings t
+                            USING updates u ON 
+                                        u.alert_name = t.alert_name
+                                        AND u.alert_query = t.alert_query
+                            WHEN NOT MATCHED THEN INSERT (alert_name, alert_query, alert_schedule, alert_recipients)
+                                            VALUES (u.alert_name, u.alert_query, u.alert_schedule, u.alert_recipients)
+                        """)
+
+                        connection.execute(upsert_query, parameters={
+                            'alert_name': alert_name,
+                            'alert_query': query,
+                            'alert_schedule': schedule,
+                            'alert_recipients': recipients
+                        })
+
+                        connection.commit()
+
+            except Exception as e:
+                print(f"Error during save with alert changes: {alert_data}")  # Debug error
+                raise e
+            finally:
+                connection.close()
+
+        ## No change, no Op
+        else:
+            pass
+
+        updated_data_after_save = alerts_manager.get_alerts_ag_grid_data().to_dict('records')
+            
+        return updated_data_after_save, save_pending_alerts_btn, dash.no_update, dash.no_update
+        
+
+    ###### Handle Deletes
+
+    if action_id == 'remove-alerts-btn' and remove_alerts_clicks > 0:
+        ## Only attempt to delete from
+        updated_delete_button = html.Button('Delete Rows', id='remove-alerts-btn', n_clicks=0,
+                                    className = 'prettier-button', style={'margin-bottom': '10px'})
+        ## Signature of rows to remove (name + query)
+        ids_to_remove = [row['id'] for row in selected_rows if row['alert_query'] is not None]
+
+        ## Get alerts to delete the jobs as well
+        rows_to_remove = [row for row in row_data if row['id'] in ids_to_remove]
+
+        updated_row_data = [row for row in row_data if row['id'] not in ids_to_remove]
+        
+        if ids_to_remove:
+
+            connection = system_query_manager.get_engine().connect()
+            try:
+                delete_query = text("""
+                    DELETE FROM alerts_settings
+                    WHERE id IN :ids
+                """).bindparams(bindparam('ids', expanding=True))
+                
+                connection.execute(delete_query, parameters={
+                            'ids': ids_to_remove
+                        })
+                
+                connection.commit()
+
+            except Exception as e:
+                print(f"Error during deletion: {e}")
+                raise e
+            finally:
+                connection.close()
+
+        if rows_to_remove:
+            ## Do do not go back to database just to delete something and re-trieve data we already have
+
+            for alert in rows_to_remove:
+
+                ### Not all alerts will have these, so the function looks for emptiness and deletes them indepdendently
+
+                job_id = alert.get('job_id', None)
+                query_id = alert.get('query_id', None)
+                alert_id = alert.get('alert_id', None)
+
+                ## Delete the associated queries, alerts, jobs to ensure things dont get cluttered
+                ## Function handles empty values
+                delete_alert_and_job(dbx_client=dbx_client, query_id=query_id, alert_id=alert_id, job_id=job_id)
+                ######
+
+            updated_changes = updated_row_data
+
+        else:
+            ## If no data to remove, just return same data
+            updated_changes = row_data
+
+        return updated_changes, dash.no_update, updated_delete_button, dash.no_update
+
+
+
+    ###### Handle job/query creation and metadata saving
+    if action_id == 'create-alert-jobs-btn' and create_jobs_clicks > 0 and selected_rows:
+
+        connection = system_query_manager.get_engine().connect()
+
+        save_loading_jobs = html.Button('Create Alert Jobs', id='create-alert-jobs-btn', n_clicks=0,
+                                    className = 'prettier-button', style={'margin-bottom': '10px'})
+        ##### use Databricks SDK to create the query, alert, and job from the row text of selected rows
+        
+        #### Step 1 - for each alert, create job and return results. Save to data frame
+        for new_row in selected_rows:
+
+            new_record_id = new_row.get('id')
+            new_alert_query = new_row.get('alert_query')
+            new_alert_name = new_row.get('alert_name')
+            new_alert_schedule = new_row.get('alert_schedule')
+            new_alert_recipients_str = new_row.get('alert_recipients')
+            new_alert_recipients = []
+
+            if new_alert_recipients_str is not None:
+                new_alert_recipients.append(new_alert_recipients_str.split(","))
+
+            ## New job id data
+            job_dict = create_alert_and_job(dbx_client = dbx_client, 
+                         warehouse_id = warehouse_id, 
+                         alert_name = new_alert_name, 
+                         alert_query= new_alert_query,
+                         alert_schedule = new_alert_schedule, 
+                         subscribers = new_alert_recipients
+                         )
+            
+            print(f"CREATED JOBS FOR ALERT: {job_dict}")
+            
+            new_job_id = job_dict.get('job_id')
+            new_query_id = job_dict.get('query_id')
+            new_alert_id = job_dict.get('alert_id')
+
+            #### Step 2 - Update grid / SQL in result db
+
+            try:
+
+                print(f"UPDATING ALERT ID: {new_record_id}")
+
+                if new_alert_name and new_alert_query:
+                    # Update existing record
+                    update_query = text("""
+                        UPDATE alerts_settings t
+                        SET 
+                        job_id = :job_id,
+                        alert_id = :alert_id,
+                        query_id = :query_id
+                        WHERE id = :new_alert_id
+                            
+                    """)
+
+                    connection.execute(update_query, parameters={
+                        'new_alert_id': new_record_id,
+                        'job_id': new_job_id,
+                        'alert_id': new_alert_id,
+                        'query_id': new_query_id
+                    })
+
+                    connection.commit()
+
+            except Exception as e:
+                print(f"Error during save with alert job creation: {new_row} \n {str(e)}")  # Debug error
+                raise e
+            finally:
+                connection.close()
+
+
+        #### Step 3 - return results - after ALL rows have been updated, not each row
+        updated_saved_rows = alerts_manager.get_alerts_ag_grid_data()
+
+        return updated_saved_rows.to_dict('records'), dash.no_update, dash.no_update, save_loading_jobs
+
+
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+
 ##### END APP #####
+
 if __name__ == '__main__':
     app.run_server(debug=True)

@@ -24,5 +24,5 @@ def render_contract_manager_page():
                 ], width=12),
         ])
     ]
-    , fluid=True)
+    , fluid=True, style={'width': '100vw'})
 

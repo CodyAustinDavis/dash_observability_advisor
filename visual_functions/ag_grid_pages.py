@@ -4,7 +4,6 @@ def get_adhoc_ag_grid_column_defs(tag_keys):
     updated_column_defs = [
         {'headerCheckboxSelection': True, 'checkboxSelection': True, 'headerCheckboxSelectionFilteredOnly': True, 'width': 50, 'suppressSizeToFit': True},
         {'headerName': 'Cluster ID', 'field': 'cluster_id', 'editable': False, 'width': 100, 'suppressSizeToFit': True, 'filter': 'agTextColumnFilter' },
-        {'headerName': 'Cluster Name', 'field': 'cluster_name', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'Policy Status', 'field': 'is_tag_policy_match', 'editable': False,'width': 100, 'suppressSizeToFit': True},
         {'headerName': 'Missing Policy Tags', 'field': 'missing_tags', 'editable': False,  'suppressSizeToFit': True},
         {'headerName': 'Tags', 'field': 'tags', 'editable': False, 'suppressSizeToFit': True},
@@ -23,6 +22,7 @@ def get_adhoc_ag_grid_column_defs(tag_keys):
         {'headerName': 'Account ID', 'field': 'account_id', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'First Usage Date', 'field': 'first_usage_date', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'Latest Usage Date', 'field': 'latest_usage_date', 'editable': False, 'suppressSizeToFit': True},
+        {'headerName': 'Cluster Name', 'field': 'cluster_name', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'Resource Owner', 'field': 'resource_owner', 'editable': False, 'suppressSizeToFit': True},
         {'headerName': 'Usage Quantity', 'field': 'usage_quantity', 'editable': False, 'suppressSizeToFit': True}
     ]

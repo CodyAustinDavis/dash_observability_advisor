@@ -116,7 +116,7 @@ final_parsed_query AS (
     END AS IsTaggingMatch,
     array_distinct(split(MatchedTagValues, ";")) AS TagCombos
   FROM
-    clean_usage AS u
+    clean_usage_table AS u
   INNER JOIN px_all AS px ON px.sku_name = u.sku_name
   --- Join up tags persisted from the app
   LEFT JOIN (SELECT *, map(tag_key, tag_value) AS user_tags FROM app_compute_tags WHERE tag_key IS NOT NULL) ct ON 

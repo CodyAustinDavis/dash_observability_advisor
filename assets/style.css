@@ -3,14 +3,12 @@
     background-color: #f8f8fc;  /*light silver */
     color: #002147;
     min-height: 100vh;  /* Full height */
-    padding: 0px;
-    min-height: 100vh;  /* Full height */
     height: 100vh;  /* Full height */
     position: -webkit-sticky; /* For Safari */
     position: sticky;
     top: 0;
     overflow-y: auto; /* Ensures scrollbar appears if content overflows */
-    transition: all 0.1s;
+    transition: width 0.1s;
     padding: 0px;
 }
 
@@ -32,22 +30,22 @@ html, body, .app-container {
 }
 
 .main-content-col {
-    transition: all 0.1s;
-    height: 100vh;  /* Ensure it matches the height of the viewport */
+    transition: width 0.1s;  /* Example: Only transition the width */
+    overflow-y: auto;
+    display: flex;
+    flex-direction: row;
+    height: 100vh;  /*this we want, keeps the main content full */
+    width: 100%;
+    padding: 0;
+    margin: 0;
 }
 
 .app-container {
     display: flex;
     flex-direction: row;
-    height: 100vh;
+    /*width: 100%;*/
+    /*height: 100vh;*/
 }
-
-.sidebar.collapsed {
-    flex: 0 0 0;
-    max-width: 0;
-    padding: 0;
-}
-
 /* NavLink adjustments for full rectangle highlight */
 .sidebar .nav-link {
     color: #002147;
@@ -63,12 +61,24 @@ html, body, .app-container {
     background-color: #002147;  /* Dark grey for active NavLink */
     color: #f8f9fa;
 }
+/*
+.child {
+    flex-grow: 1; 
+    width: 100%;
+}
+*/
 /* Style for the main content area */
 .main-content {
     background-color: #f8f8fc; 
     padding: 5px;
     border: 1px solid #002147;  /* Dark navy blue */
     transition: all 0.8s;
+    /* New - KEEPS the child containers full */
+    display: flex;
+    flex-direction: row; /* or 'row' depending on your layout */
+    height: 100%; /* Take up all available space in the dimension */
+    width: 100%;
+    
 }
 
 .prettier-button {
@@ -148,6 +158,7 @@ html, body, .app-container {
     margin-bottom: 5px;
     margin-left: 5px;
     margin-right: 5px;
+    padding: 5px;
 }
 
 

@@ -140,9 +140,8 @@ def render_settings_page():
                 ], type="default")
             ])
         ]),
-        html.Div(className='border-top'),
-            
-    ], fluid=True)
+        html.Div(className='border-top')
+    ], fluid=True, style={'width': '100vw'})
 
 
     return layout

@@ -29,14 +29,14 @@ def safe_add(a, b):
 
 ## Handle Local Updates to Store (do NOT clear store)
 # Accumulate changes for new records
-def group_changes_by_row(changes):
+def group_changes_by_row(changes, row_index_col = 'rowIndex'):
     try: 
 
         if changes:
 
             grouped_changes = {}
             for change in changes:
-                row_index = change['rowIndex']
+                row_index = change[row_index_col]
                 if row_index not in grouped_changes:
                     grouped_changes[row_index] = change.copy()
                 else:

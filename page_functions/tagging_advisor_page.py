@@ -68,6 +68,7 @@ class TagAdvisorPageManager():
         try:
             query = session.query(TagPoliciesAGGRid)
             df = pd.read_sql(query.statement, session.bind)
+
         finally:
             session.close()
         return df #.to_dict('records')
@@ -382,7 +383,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                             dcc.Loading(
                                 id="loading-matched-usage-chart",
                                 type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
-                                children=html.Div([dcc.Graph(id='matched-usage-ind', className = 'chart-visuals')]),
+                                children=html.Div([dcc.Graph(id='matched-usage-ind', className = 'chart-visuals', config={'responsive': True})]),
                                 fullscreen=False,  # True to make the spinner fullscreen
                                 color= '#002147')
                             ])
@@ -392,7 +393,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                             dcc.Loading(
                                 id="loading-unmatched-usage-chart",
                                 type="default",  # Can be "graph", "cube", "circle", "dot", or "default"
-                                children=html.Div([dcc.Graph(id='unmatched-usage-ind', className = 'chart-visuals')]),
+                                children=html.Div([dcc.Graph(id='unmatched-usage-ind', className = 'chart-visuals', config={'responsive': True})]),
                                 fullscreen=False,  # True to make the spinner fullscreen
                                 color= '#002147')
                             ])
@@ -403,7 +404,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                     dcc.Loading(
                         id="loading-percent-match-ind",  # new ID for additional content
                         type="default",
-                        children=html.Div([dcc.Graph(id='percent-match-ind', className='chart-visuals')]),
+                        children=html.Div([dcc.Graph(id='percent-match-ind', className='chart-visuals', config={'responsive': True})]),
                         fullscreen=False,
                         color='#002147')
                     ])
@@ -972,7 +973,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
         ###### END SQL Usage Grid
 
     dbc.Container(id='output-container')
-    ], fluid=True)
+    ], fluid=True, style={'width': '83.3vw'})
 
     return layout
 
