@@ -224,6 +224,8 @@ def build_tag_query_from_params(
                                 final_agg_query=None):
     
     ## Load Base Query Template Parts
+
+    ## filtered usage
     TAG_QUERY_1 = read_sql_file("./config/tagging_advisor/base_tag_query_1.sql") ## Where you add selected tags
     TAG_QUERY_2 = read_sql_file("./config/tagging_advisor/base_tag_query_2.sql")
     TAG_QUERY_3 = read_sql_file("./config/tagging_advisor/base_tag_query_3.sql") ## Where you filter the rest of the paramters
@@ -232,33 +234,41 @@ def build_tag_query_from_params(
 
     FINAL_QUERY = ""
 
-    ## Tag Dynamic Filter Construction
-    if tag_policies:
+    ### Add Time Ranges
+    FINAL_QUERY = TAG_QUERY_1 + f"\n usage_start_time >= '{start_date}'::timestamp \n AND usage_start_time <= '{end_date}'::timestamp"
 
-        tag_policies_str = ', '.join([f"'{key}'" for key in tag_policies]) 
-        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_policy_name IN ({tag_policies_str})"
-    
-    if tag_keys:
-        tag_keys_str = ', '.join([f"'{key}'" for key in tag_keys]) 
-        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_key IN ({tag_keys_str})"
-    
-    if tag_values:
-        tag_values_str = ', '.join([f"'{key}'" for key in tag_values]) 
-        TAG_QUERY_1 = TAG_QUERY_1 + f"\n AND tag_value IN ({tag_values_str})"
-
-    FINAL_QUERY = FINAL_QUERY + "\n" + TAG_QUERY_1 + "\n" + TAG_QUERY_2
-    ## 
-    FINAL_QUERY = FINAL_QUERY + TAG_QUERY_3 + f"\n AND usage_start_time >= '{start_date}'::timestamp \n AND usage_start_time <= '{end_date}'::timestamp"
-
-
+    ## Filtered product cates
     if product_category:
         product_categories_str = ', '.join([f"'{key}'" for key in product_category]) 
         FINAL_QUERY = FINAL_QUERY + f"\n AND billing_origin_product IN ({product_categories_str})"
 
-    if compute_tag_keys:
+
+    ## Add Tag Policy Filters
+    FINAL_QUERY = FINAL_QUERY + TAG_QUERY_2
+
+
+    ## Tag Dynamic Filter Construction
+    if tag_policies:
+
+        tag_policies_str = ', '.join([f"'{key}'" for key in tag_policies]) 
+        FINAL_QUERY = FINAL_QUERY + f"\n AND tag_policy_name IN ({tag_policies_str})"
+    
+    if tag_keys:
+        tag_keys_str = ', '.join([f"'{key}'" for key in tag_keys]) 
+        FINAL_QUERY = FINAL_QUERY + f"\n AND tag_key IN ({tag_keys_str})"
+    
+    if tag_values:
+        tag_values_str = ', '.join([f"'{key}'" for key in tag_values]) 
+        FINAL_QUERY = FINAL_QUERY + f"\n AND tag_value IN ({tag_values_str})"
+
+
+    FINAL_QUERY = FINAL_QUERY + TAG_QUERY_3
+
+    ## Now add any cleaned tag filters
+    if compute_tag_keys and compute_tag_keys != 'All':
 
         compute_tag_keys_str = ', '.join([f"'{key}'" for key in compute_tag_keys]) 
-        FINAL_QUERY = FINAL_QUERY + f"\n AND size(array_intersect(map_keys(custom_tags), array({compute_tag_keys_str}))) >= 1"
+        FINAL_QUERY = FINAL_QUERY + f"\n AND size(array_intersect(updated_tags.keys(), array({compute_tag_keys_str}))) >= 1"
 
 
     if tag_filter == 'Matched':
@@ -294,8 +304,8 @@ def build_adhoc_ag_grid_from_params(
                     clean_cluster_id AS cluster_id,
                     MAX(cluster_name) AS cluster_name,
                     MIN(IsTaggingMatch) AS is_tag_policy_match,
-                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
-                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    flatten(collect_set(MatchedTagKeys)) AS tag_matches,
+                    flatten(collect_set(MissingTagKeys)) AS missing_tags,
                     MAX(billing_origin_product) AS product_type,
                     MAX(workspace_id) AS workspace_id,
                     MAX(account_id) AS account_id,
@@ -311,8 +321,8 @@ def build_adhoc_ag_grid_from_params(
                     date_diff(DAY, first_usage_date , getdate()) AS resource_age,
                     date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
                     FROM filtered_result
-                    WHERE 1=1 
-                    AND billing_origin_product IN ('ALL_PURPOSE')
+                    WHERE
+                    billing_origin_product IN ('ALL_PURPOSE')
                     GROUP BY clean_cluster_id
                     ORDER BY Dollar_DBUs_List DESC
                     """
@@ -339,8 +349,8 @@ def build_sql_ag_grid_from_params(
                     SELECT 
                     clean_warehouse_id AS warehouse_id,
                     MIN(IsTaggingMatch) AS is_tag_policy_match,
-                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
-                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    flatten(collect_set(MatchedTagKeys)) AS tag_matches,
+                    flatten(collect_set(MissingTagKeys)) AS missing_tags,
                     MAX(billing_origin_product) AS product_type,
                     MAX(workspace_id) AS workspace_id,
                     MAX(account_id) AS account_id,
@@ -356,8 +366,8 @@ def build_sql_ag_grid_from_params(
                     date_diff(DAY, first_usage_date , getdate()) AS resource_age,
                     date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
                     FROM filtered_result
-                    WHERE 1=1 
-                    AND billing_origin_product IN ('SQL')
+                    WHERE
+                    billing_origin_product IN ('SQL')
                     AND clean_warehouse_id IS NOT NULL
                     GROUP BY clean_warehouse_id
                     ORDER BY Dollar_DBUs_List DESC
@@ -387,8 +397,8 @@ def build_jobs_ag_grid_from_params(
                     clean_job_or_pipeline_id AS job_id,
                     MAX(cluster_name) AS cluster_name,
                     MIN(IsTaggingMatch) AS is_tag_policy_match,
-                    array_distinct(collect_list(MatchedTagValues)) AS tag_matches,
-                    array_distinct(collect_list(MissingTagKeys)) AS missing_tags,
+                    flatten(collect_set(MatchedTagKeys)) AS tag_matches,
+                    flatten(collect_set(MissingTagKeys)) AS missing_tags,
                     MAX(billing_origin_product) AS product_type,
                     MAX(workspace_id) AS workspace_id,
                     MAX(account_id) AS account_id,
@@ -404,8 +414,8 @@ def build_jobs_ag_grid_from_params(
                     date_diff(DAY, first_usage_date , getdate()) AS resource_age,
                     date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
                     FROM filtered_result
-                    WHERE 1=1 
-                    AND billing_origin_product IN ('JOBS')
+                    WHERE
+                    billing_origin_product IN ('JOBS')
                     AND clean_job_or_pipeline_id IS NOT NULL
                     GROUP BY clean_job_or_pipeline_id
                     ORDER BY Dollar_DBUs_List DESC

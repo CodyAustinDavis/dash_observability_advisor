@@ -5,15 +5,15 @@ Date: 5/25/2024
 Description: Dash Apps for Tagging and Data Compute Observability
 
 TO DO: 
-1. ALERTS PAGE: When deleting an alert, should use Databricks SDK to delete the related job/query/alert_id as well. 
-6. Create settings page that lets a user input the workspace name and select the warehouse to execute against. (OAuth)
+1. Create settings page that lets a user input the workspace name and select the warehouse to execute against. (OAuth)
+
 7. Create LLM to generate visuals for system tables upon request / Alerts
 9. Need to add Warehouse Name and owner once Warehouses system tables is available
-10. Automatically incrementally create query/alert/job for a given alert, even for partial saves so that you dont create dups
+10. Handle partial saves for alerts/queries/jobs so that you dont create dups
 
 BUGS: 
 1. Make filters update based on other selected filter values
-2. AG Grid Cannot handle deleting tag policies and having it show up properly. I think this is a spark bug - UC is right but the query is now
+2. Better cache handling
 """
 
 
@@ -102,38 +102,38 @@ cache = Cache(app.server, config={
 })
 
 #### Define cached data calling functions ######
-@cache.memoize(timeout=300)  # Cache the results for 5 minutes
+@cache.memoize(timeout=600)  # Cache the results for 5 minutes
 def cached_execute_query_to_df(query):
     return system_query_manager.execute_query_to_df(query)
 
 ### Cache the start up load specifically
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=600)
 def cached_get_base_tag_page_filter_defaults():
     return tag_advisor_manager.get_base_tag_page_filter_defaults()
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=600)
 def cached_get_tag_filters():
     return tag_advisor_manager.get_tag_filters()
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=600)
 def cached_get_tag_policies_grid_data():
     return tag_advisor_manager.get_tag_policies_grid_data()
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=60)
 def cached_get_compute_tagged_grid_data():
     return tag_advisor_manager.get_compute_tagged_grid_data()
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=60)
 def cached_get_adhoc_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
     return tag_advisor_manager.get_adhoc_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
 
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=60)
 def cached_get_jobs_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
     return tag_advisor_manager.get_jobs_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
 
 
-@cache.memoize(timeout=1200)
+@cache.memoize(timeout=60)
 def cached_get_sql_clusters_grid_data(start_date, end_date, tag_filter=None, tag_policies=None, product_category=None, tag_keys=None, tag_values=None, compute_tag_keys=None, top_n=100):
     return tag_advisor_manager.get_sql_clusters_grid_data(start_date = start_date, end_date = end_date, tag_filter=tag_filter, tag_policies=tag_policies, product_category=product_category, tag_keys=tag_keys, tag_values=tag_values, compute_tag_keys=compute_tag_keys, top_n=top_n)
 
@@ -857,9 +857,9 @@ def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_c
 
 
     ##### Handle Changes to top N filter
+    #### This is what is happenening
     ### If the refresh button gets clicked, refresh the AG Grids
-    print(f"NUM CLICKS: {n_clicks}")
-    if (triggered_id == 'top-n-adhoc' and top_n) or (n_clicks > 0):
+    if (triggered_id == 'top-n-adhoc' and top_n) or (triggered_id == 'update-params-button' and n_clicks > 0):
        
        updated_data = tag_advisor_manager.get_adhoc_clusters_grid_data(
         start_date=start_date,
@@ -1026,7 +1026,7 @@ def update_jobs_grid_data(n_clicks, start_date, end_date, tag_filter, product_ca
 
 
     ##### Handle Changes to top N filter
-    if (triggered_id == 'top-n-jobs' and top_n) or (n_clicks > 0):
+    if (triggered_id == 'top-n-jobs' and top_n) or (triggered_id == 'update-params-button' and n_clicks > 0):
        
        updated_data = tag_advisor_manager.get_jobs_clusters_grid_data(
         start_date=start_date,
@@ -1190,7 +1190,7 @@ def update_sql_grid_data(n_clicks, start_date, end_date, tag_filter, product_cat
 
 
     ##### Handle Changes to top N filter
-    if (triggered_id == 'top-n-sql' and top_n) or (n_clicks > 0):
+    if (triggered_id == 'top-n-adhoc' and top_n) or (triggered_id == 'update-params-button' and n_clicks > 0):
        
        updated_data = tag_advisor_manager.get_sql_clusters_grid_data(
         start_date=start_date,
@@ -1612,19 +1612,21 @@ def update_inputs_from_store(data):
     Output('save-pending-alert-loading', 'children'),
     Output('loading-remove-alerts', 'children'),
     Output('loading-create-jobs-alerts', 'children'),
+    Output('loading-refresh-alerts', 'children'),
     ## the in progress alert store should also be cleared, so do we combine callbacks?
     Input('save-pending-alerts-btn', 'n_clicks'),
     Input('create-alert-jobs-btn', 'n_clicks'),
     Input('remove-alerts-btn', 'n_clicks'),
+    Input('refresh-alerts-grid-btn', 'n_clicks'),
     State('in-progress-alert', 'data'),
     State('alerts-grid', 'rowData'),
     State('alerts-grid', 'selectedRows') ## Might not need a store because we are just going to delete selected rows, no adding / editing
 )
-def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks, in_progress_data, row_data, selected_rows):
+def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks, refresh_grid_clicks, in_progress_data, row_data, selected_rows):
 
     ctx = dash.callback_context
     if not ctx.triggered:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     action_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
@@ -1693,7 +1695,7 @@ def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks,
 
         updated_data_after_save = alerts_manager.get_alerts_ag_grid_data().to_dict('records')
             
-        return updated_data_after_save, save_pending_alerts_btn, dash.no_update, dash.no_update
+        return updated_data_after_save, save_pending_alerts_btn, dash.no_update, dash.no_update, dash.no_update
         
 
     ###### Handle Deletes
@@ -1747,13 +1749,23 @@ def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks,
                 delete_alert_and_job(dbx_client=dbx_client, query_id=query_id, alert_id=alert_id, job_id=job_id)
                 ######
 
-            updated_changes = updated_row_data
+            updated_saved_rows = alerts_manager.get_alerts_ag_grid_data().to_dict('records')
 
         else:
             ## If no data to remove, just return same data
-            updated_changes = row_data
+            updated_saved_rows = row_data
 
-        return updated_changes, dash.no_update, updated_delete_button, dash.no_update
+        return updated_saved_rows, dash.no_update, updated_delete_button, dash.no_update, dash.no_update
+
+
+    ## Manual refresh button        
+    if action_id == 'refresh-alerts-grid-btn' and refresh_grid_clicks > 0:
+
+        refresh_alert_button = html.Button('Refresh', id='refresh-alerts-grid', n_clicks=0,
+                                    className = 'prettier-button', style={'margin-bottom': '10px'})
+        updated_grid_data_refresh = alerts_manager.get_alerts_ag_grid_data().to_dict('records')
+
+        return updated_grid_data_refresh, dash.no_update, dash.no_update, dash.no_update, refresh_alert_button
 
 
 
@@ -1831,10 +1843,10 @@ def update_alerts_ag_grid(save_clicks, create_jobs_clicks, remove_alerts_clicks,
         #### Step 3 - return results - after ALL rows have been updated, not each row
         updated_saved_rows = alerts_manager.get_alerts_ag_grid_data()
 
-        return updated_saved_rows.to_dict('records'), dash.no_update, dash.no_update, save_loading_jobs
+        return updated_saved_rows.to_dict('records'), dash.no_update, dash.no_update, save_loading_jobs, dash.no_update
 
 
-    return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 ##### END APP #####

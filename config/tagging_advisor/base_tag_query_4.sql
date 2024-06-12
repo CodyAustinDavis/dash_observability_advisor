@@ -1,4 +1,4 @@
 
 ) 
 
-SELECT * FROM final_parsed_query
+SELECT * FROM filtered_result

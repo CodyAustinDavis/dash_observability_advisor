@@ -143,7 +143,7 @@ class TagAdvisorPageManager():
         # Get today's date
         today = datetime.now()
         # Subtract 7 days
-        date_30_days_ago = today - timedelta(days=30)
+        date_30_days_ago = today - timedelta(days=14)
         current_date_filter = today.date()
         day_30_rolling_filter = date_30_days_ago.date()
 
@@ -647,6 +647,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                                     'headerName': 'Compute Id', 
                                     'field': 'compute_asset_id', 
                                     'editable': True,
+                                     'width': 150, 
                                     'suppressSizeToFit': True
                                 },
                                 {

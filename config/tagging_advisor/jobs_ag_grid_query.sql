@@ -18,13 +18,13 @@ MIN(usage_date) AS first_usage_date,
 MAX(usage_date) AS latest_usage_date,
 date_diff(DAY, first_usage_date , getdate()) AS resource_age,
 date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
-FROM clean_usage_table
+FROM clean_usage
 GROUP BY clean_cluster_id
 )
 
 SELECT
 job_id,
-collect_list(clean_cluster_id) AS cluster_ids,
+collect_set(clean_cluster_id) AS cluster_ids,
 MAX(cluster_name) AS cluster_name,
 MAX(product_type) AS product_type,
 MAX(workspace_id) AS workspace_id,

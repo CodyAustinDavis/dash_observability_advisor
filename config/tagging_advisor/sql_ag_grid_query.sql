@@ -17,7 +17,7 @@ MIN(usage_date) AS first_usage_date,
 MAX(usage_date) AS latest_usage_date,
 date_diff(DAY, first_usage_date , getdate()) AS resource_age,
 date_diff(DAY, latest_usage_date , getdate()) AS days_since_last_use
-FROM clean_usage_table
+FROM clean_usage
 WHERE billing_origin_product IN ('SQL')
 AND clean_warehouse_id IS NOT NULL
 GROUP BY clean_warehouse_id

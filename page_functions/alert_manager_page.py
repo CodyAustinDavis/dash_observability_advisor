@@ -85,9 +85,15 @@ def render_alert_manager_page(alerts_ag_grid_data):
 
         #### Ag Grid Title and Buttons (delete, save)
         dbc.Row([dbc.Col(html.H4("Saved Alerts", style={'color':'#002147', 'margin-top':'10px'}), width=2),
-                 dbc.Col(width=6), ## spacer
-                dbc.Col(dcc.Loading(
+                 dbc.Col(width=4), ## spacer
+                 dbc.Col(dcc.Loading(
                                     id="loading-create-jobs-alerts",
+                                    type="default",  # Choose the style of the loading animation
+                                    children=html.Button('Refresh', id='refresh-alerts-grid-btn', n_clicks=0,
+                                    className = 'prettier-button', style={'margin-bottom': '10px'})
+                                , style={'color':'#002147'}), width=2),
+                dbc.Col(dcc.Loading(
+                                    id='loading-refresh-alerts',
                                     type="default",  # Choose the style of the loading animation
                                     children=html.Button('Create Alert Jobs', id='create-alert-jobs-btn', n_clicks=0,
                                     className = 'prettier-button', style={'margin-bottom': '10px'})
