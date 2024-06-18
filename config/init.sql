@@ -58,7 +58,7 @@ SELECT
 u.*,
 c.*,
 u.workspace_id AS clean_workspace_id,
-sku_price*usage_quantity*0.2 AS Dollar_DBUs_List,
+sku_price*usage_quantity AS Dollar_DBUs_List,
 -- Clean up cluster / warehouse ids from all places
 COALESCE(c.cluster_id, u.usage_metadata.cluster_id) AS clean_cluster_id,
 COALESCE(u.usage_metadata.warehouse_id) AS clean_warehouse_id,
@@ -131,7 +131,7 @@ SELECT
 u.*,
 c.*,
 u.workspace_id AS clean_workspace_id,
-sku_price*usage_quantity*0.22 AS Dollar_DBUs_List,
+sku_price*usage_quantity AS Dollar_DBUs_List,
 -- Clean up cluster / warehouse ids from all places
 COALESCE(c.cluster_id, u.usage_metadata.cluster_id) AS clean_cluster_id,
 COALESCE(u.usage_metadata.warehouse_id) AS clean_warehouse_id,

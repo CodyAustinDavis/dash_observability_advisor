@@ -96,7 +96,7 @@ final_parsed_query AS (
   SELECT
     u.*,
     -- TO DO: Add Discounts Table Later
-    ((1 - COALESCE(NULL, 0.9)) * sku_price) * usage_quantity AS Dollar_DBUs,
+    ((1 - COALESCE(NULL, 0)) * sku_price) * usage_quantity AS Dollar_DBUs,
     -- Combine system tags with App tags
     -- Combine system tags with App tags
     u.clean_tags AS updated_tags,
