@@ -25,7 +25,7 @@ tag_potential_matches AS (
         WHEN NumberOfMatchedKeys >= TotalPolicyTags THEN 'In Policy'
         ELSE 'Not Matched To Tag Policy'
     END AS IsTaggingMatch,
-    collect_set(CONCAT(TagKey, COALESCE(CONCAT(': ', TagKey), ''))) AS TagCombos, --TagCombo from tag policies
+    collect_set(CASE WHEN COALESCE(IsPolicyTag, 0) > 0 THEN CONCAT(TagKey, COALESCE(CONCAT(': ', TagValue), '')) END) AS TagCombos, --TagCombo from tag policies
     collect_set(CASE WHEN IsPolicyTag = 1 THEN TagKey END) AS MatchingTagKeys,
     collect_set(CASE WHEN IsPolicyTag = 1 THEN TagValue END) AS MatchingTagValues,
     collect_set(CONCAT(TagKey, COALESCE(CONCAT(': ', TagValue), ''))) AS updated_tags

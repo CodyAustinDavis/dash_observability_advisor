@@ -977,9 +977,22 @@ def update_adhoc_grid_data(n_clicks, start_date, end_date, tag_filter, product_c
         else:
             print(f"NOOPPPP for some reason: {changes} \n {original_data}")
             pass
+
+        ## If any changes are saved / edited, do not just return original data, you must return currently selected data with updates (policy match filter can change)
+        updated_data = tag_advisor_manager.get_adhoc_clusters_grid_data(
+        start_date=start_date,
+        end_date=end_date,
+        tag_filter=tag_filter,
+        product_category = product_category,
+        tag_policies=tag_policies,
+        tag_keys=tag_keys,
+        tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
+        top_n=top_n
+        )
             
         
-        return [], original_data, {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
+        return [], updated_data.to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
         
 
     # Default return to avoid callback errors
@@ -1139,9 +1152,21 @@ def update_jobs_grid_data(n_clicks, start_date, end_date, tag_filter, product_ca
         ## No change, no Op
         else:
             pass
+
+        updated_data = tag_advisor_manager.get_jobs_clusters_grid_data(
+        start_date=start_date,
+        end_date=end_date,
+        tag_filter=tag_filter,
+        product_category = product_category,
+        tag_policies=tag_policies,
+        tag_keys=tag_keys,
+        tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
+        top_n=top_n
+        )
             
         
-        return [], original_data, {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
+        return [], updated_data.to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
         
 
     # Default return to avoid callback errors
@@ -1304,8 +1329,20 @@ def update_sql_grid_data(n_clicks, start_date, end_date, tag_filter, product_cat
         else:
             pass
             
-        
-        return [], original_data, {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
+
+        updated_data = tag_advisor_manager.get_sql_clusters_grid_data(
+        start_date=start_date,
+        end_date=end_date,
+        product_category = product_category,
+        tag_filter = tag_filter,
+        tag_policies=tag_policies,
+        tag_keys=tag_keys,
+        tag_values=tag_values,
+        compute_tag_keys=compute_tag_keys,
+        top_n=top_n
+        )
+       
+        return [], updated_data.to_dict('records'), {'display': 'none'}, save_loading_content, dash.no_update, 'tag_save_triggered'
         
 
     # Default return to avoid callback errors
