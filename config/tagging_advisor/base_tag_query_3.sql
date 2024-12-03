@@ -22,8 +22,9 @@ tag_potential_matches AS (
     SUM(COALESCE(IsPolicyTag, 0)) AS NumberOfMatchedKeys,
     COUNT(DISTINCT tag_value) AS NumberOfMatchedValues,
     CASE
-        WHEN NumberOfMatchedKeys >= TotalPolicyTags THEN 'In Policy'
-        ELSE 'Not Matched To Tag Policy'
+      WHEN ((NumberOfMatchedKeys >= TotalPolicyTags) AND TotalPolicyTags > 0) THEN 'In Policy'
+      WHEN TotalPolicyTags = 0 THEN 'No Policies'
+      ELSE 'Not Matched To Tag Policy'
     END AS IsTaggingMatch,
     collect_set(CASE WHEN COALESCE(IsPolicyTag, 0) > 0 THEN CONCAT(TagKey, COALESCE(CONCAT(': ', TagValue), '')) END) AS TagCombos, --TagCombo from tag policies
     collect_set(CASE WHEN IsPolicyTag = 1 THEN TagKey END) AS MatchingTagKeys,

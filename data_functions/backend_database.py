@@ -41,7 +41,7 @@ from sqlalchemy.orm import DeclarativeBase, Session
 
 class QueryManager:
 
-    def __init__(self, host: str, http_path: str, access_token: str, catalog: str = None, schema: str = None):
+    def __init__(self, host: str, http_path: str, auth_type: str = 'token', access_token: str = None, catalog: str = None, schema: str = None):
 
         extra_connect_args = {
         "_tls_verify_hostname": True,
@@ -49,7 +49,21 @@ class QueryManager:
         }
 
         ## url with catalog and schema optional
-        database_url = f"databricks://token:{access_token}@{host}?http_path={http_path}"
+        extra_connect_args = {
+            "_tls_verify_hostname": True,
+            "_user_agent_entry": "Databricks Observability Advisor",
+        }
+
+        # Construct the database URL based on authentication type
+        if auth_type == "token" or access_token is not None:
+            database_url = f"databricks://token:{access_token}@{host}?http_path={http_path}"
+        
+        ### TO DO: Does not work yet
+        elif auth_type == "oauth":
+            database_url = f"databricks://{host}?http_path={http_path}"
+        else:
+            raise ValueError("Invalid authentication type or missing access token for 'token' auth_type")
+
 
         if catalog is not None:
             database_url = database_url + f"&catalog={catalog}"

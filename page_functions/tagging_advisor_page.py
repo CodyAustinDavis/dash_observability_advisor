@@ -31,7 +31,11 @@ from data_functions.backend_database import (
 )
 import logging
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, bindparam
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service import sql, jobs
+from databricks.sdk.service.compute import UpdateClusterResource 
+from databricks.sdk.service.sql import EndpointTags, EndpointTagPair
 
 
 
@@ -58,7 +62,175 @@ class TagAdvisorPageManager():
         ## Create all init tables that this app needs to exists - We use SQL Alchemy models so we can more easily programmatically write back
         Base.metadata.create_all(system_engine, checkfirst=True)
         return
+    
+    
+    def delete_tag_ids(self, ids_to_remove):
 
+        if ids_to_remove:
+            connection = self.system_query_manager.get_engine().connect()
+            try:
+                delete_query = text("""
+                    DELETE FROM app_compute_tags
+                    WHERE tag_id IN :ids
+                """).bindparams(bindparam('ids', expanding=True))
+                connection.execute(delete_query, parameters= {'ids':ids_to_remove})
+                connection.commit()
+
+            except Exception as e:
+                print(f"Error during deletion: {e}")
+                raise e
+            finally:
+                connection.close()
+        return
+    
+
+    def save_manual_tags_edits(self, grouped_changes):
+        try:
+            connection = self.system_query_manager.get_engine().connect()
+            for change in grouped_changes:
+                #print("Combined change data:", change)  # Debug statement
+                record_id = change.get('tag_id')
+
+                if record_id:
+                    # Update existing record
+                    update_query = text("""
+                        UPDATE app_compute_tags t
+                        SET 
+                        tag_policy_name = :tag_policy_name,
+                        tag_key = :tag_key,
+                        tag_value = :tag_value
+                        WHERE tag_id = :tag_id
+                                AND compute_asset_id = :compute_asset_id
+                                AND compute_asset_type = :compute_asset_type
+                            
+                    """)
+
+                    connection.execute(update_query, parameters={
+                        'tag_id': record_id,
+                        'compute_asset_id': change.get('compute_asset_id', None),
+                        'compute_asset_type': change.get('compute_asset_type', None),
+                        'tag_policy_name': change.get('tag_policy_name', None),
+                        'tag_key': change.get('tag_key', None),
+                        'tag_value': change.get('tag_value', None)
+                    })
+
+                    connection.commit()
+
+        except Exception as e:
+            print(f"Error during save with tag changes: {grouped_changes}")  # Debug error
+            raise e
+        finally:
+            connection.close()
+
+        return
+
+
+    def sync_manual_tags_to_assets(self, dbx_client, selected_rows):
+        #### Attempt to save each tag - might not have permissions, etc. log/print error
+        ### Single connection for multiple rows
+        try: 
+
+            connection = self.system_query_manager.get_engine().connect()
+
+            for active_row in selected_rows:
+
+                try: 
+
+                    active_tag_id = active_row.get('tag_id')
+                    active_compute_id = active_row.get('compute_asset_id')
+                    active_compute_type = active_row.get('compute_asset_type')
+                    active_tag_key = active_row.get('tag_key')
+                    active_tag_value = active_row.get('tag_value')
+                    active_is_tag_already_persisted = active_row.get('is_persisted_to_actual_asset')
+
+                    if not active_is_tag_already_persisted or (active_is_tag_already_persisted): ## DEBUG
+
+                        ## Check if adhoc/jobs/sql compute type
+                        if active_compute_type == 'ALL_PURPOSE':
+
+                            ap_cluster_info = dbx_client.clusters.get(cluster_id = active_compute_id).as_dict()
+
+                            # Update the tags
+                            ap_new_tags = ap_cluster_info['custom_tags'] or {}
+                            ap_new_tags.update({active_tag_key: active_tag_value})
+
+                                # Specify which fields to update
+                            update_mask = "custom_tags"
+
+                            # Create the update cluster resource
+                            ap_cluster_update = UpdateClusterResource(
+                                custom_tags=ap_new_tags)
+
+                            ## try to save update tags
+                            dbx_client.clusters.update(cluster_id = active_compute_id, update_mask = update_mask, cluster = ap_cluster_update)
+
+
+                        elif active_compute_type == 'JOBS':
+
+                            jobs_info = dbx_client.jobs.get(active_compute_id)
+                            # Update the tags
+                            jobs_new_tags = jobs_info.settings.tags or {}
+                            jobs_new_tags.update({active_tag_key: active_tag_value})
+                            ## try to save update tags
+                            dbx_client.jobs.update(job_id = active_compute_id, new_settings = jobs.JobSettings(tags = jobs_new_tags))
+
+
+                        elif active_compute_type == 'SQL':
+
+                            # Get the warehouse information
+                            warehouse_info = dbx_client.warehouses.get(active_compute_id)
+                            existing_tags = warehouse_info.tags.custom_tags or []
+                            updated_tags_dict = {tag.key: tag.value for tag in existing_tags}
+                            updated_tags_dict[active_tag_key] = active_tag_value
+                            new_custom_tags = [EndpointTagPair(key=k, value=v) for k, v in updated_tags_dict.items()]
+                            updated_tags_obj = EndpointTags(custom_tags=new_custom_tags)
+
+                            # Update the warehouse tags
+                            dbx_client.warehouses.edit(id=active_compute_id, tags=updated_tags_obj)
+
+                        ## If succeed, update the field
+                        active_is_tag_already_persisted = True
+
+                        ## Mark as tagged in DB
+                        try:
+
+                            update_query = text("""
+                                UPDATE app_compute_tags t
+                                SET 
+                                is_persisted_to_actual_asset = :is_persisted
+                                WHERE tag_id = :tag_id
+                                        AND compute_asset_id = :compute_asset_id
+                                        AND compute_asset_type = :compute_asset_type
+                                
+                            """)
+
+                            connection.execute(update_query, parameters={
+                                'tag_id': active_tag_id,
+                                'compute_asset_id': active_compute_id,
+                                'compute_asset_type': active_compute_type,
+                                'is_persisted': active_is_tag_already_persisted
+                            })
+
+                            connection.commit()
+
+                        except Exception as e:
+                            print(f"Error during saving tag sync flag: {str(e)}")  # Debug error
+                            raise e
+
+
+                    print(f"\nTAG SYNC SUCCESS: Synced tag id {active_tag_id} for compute {active_compute_id} - {active_compute_type}")
+
+                except Exception as e:
+
+                    print(f"\nTAG SYNC FAILED: failed to sync tag id {active_tag_id} for compute {active_compute_id} - {active_compute_type} with erorr \n {str(e)}")
+
+        except Exception as e:
+            print(f"Tag Selection Sync Failed for some reason... {str(e)}")
+
+        finally:
+            connection.close()
+
+        return
 
     #### For the Reflection / AG Grid updates
     def get_tag_policies_grid_data(self):
@@ -498,7 +670,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                                     id="loading-save-policies",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147', 
-                                    children=html.Button('Save Policy Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                    children=html.Button('Save Changes', id='tag-policy-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
                             ], width=3),
                             dbc.Col([
@@ -506,7 +678,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                                     id="loading-clear-policies",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147',
-                                    children=html.Button('Clear Policy Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                    children=html.Button('Clear Changes', id='tag-policy-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
                             ], width=3),
                                         # Spacer column to push the last two columns to the right
@@ -598,7 +770,7 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                                     id="loading-save-compute-tags",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147', 
-                                    children=html.Button('Save Tag Changes', id='tag-compute-tags-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                    children=html.Button('Save Changes', id='tag-compute-tags-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
                             ], width=3),
                             dbc.Col([
@@ -606,12 +778,20 @@ def render_tagging_advisor_page(df_date_min_filter, df_date_max_filter,
                                     id="loading-clear-compute-tags",
                                     type="default",  # Choose the style of the loading animation
                                     color= '#002147',
-                                    children=html.Button('Clear Tag Changes', id='tag-compute-tags-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                    children=html.Button('Clear Changes', id='tag-compute-tags-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+                                )
+                            ], width=3),
+                            dbc.Col([
+                                dcc.Loading(
+                                    id="loading-sync-compute-tags",
+                                    type="default",  # Choose the style of the loading animation
+                                    color= '#002147',
+                                    children=html.Button('Sync Tags To Assets', id='tag-compute-tags-sync-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
                                 )
                             ], width=3),
                                         # Spacer to push the last two columns to the right
                             dbc.Col(
-                                width={"size": 4}
+                                width={"size": 1}
                             ),
                             dbc.Col([
                                 dcc.Loading(

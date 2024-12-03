@@ -1,0 +1,16 @@
+command: [
+  "python",
+  "app.py"
+]
+
+env:
+  - name: "DATABRICKS_HOST"
+    value: 
+  - name: "DATABRICKS_HTTP_PATH"
+    value: 
+  - name: "DATABRICKS_CATALOG"
+    value: "main"
+  - name: "DATABRICKS_SCHEMA"
+    value: "dash_observability_advisor"
+  - name: "TOKEN"
+    value: 

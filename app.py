@@ -38,8 +38,26 @@ from pandasql import sqldf
 from flask_caching import Cache
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import sql, jobs
+from databricks.sdk.service.compute import UpdateClusterResource 
+from databricks.sdk.service.sql import EndpointTags, EndpointTagPair
 from datetime import date, datetime, time, timedelta, timezone
+import os
+import yaml
 
+
+
+def load_yaml_as_env(yaml_file):
+    with open(yaml_file, "r") as file:
+        config = yaml.safe_load(file)
+
+    # Loop through the `env` section and set environment variables
+    if 'env' in config:
+        for item in config['env']:
+            os.environ[item['name']] = item['value']
+
+
+# Usage example
+load_yaml_as_env("app.yaml")
 
 ## Log SQL Alchemy Commands
 logging.basicConfig(level=logging.ERROR)
@@ -55,9 +73,9 @@ env_path = os.path.join(base_dir, './', 'config', '.env')
 load_dotenv(dotenv_path=env_path)
 
 ## load auth into variables
-host = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+host = os.getenv("DATABRICKS_HOST")
 http_path = os.getenv("DATABRICKS_HTTP_PATH")
-access_token = os.getenv("DATABRICKS_TOKEN")
+access_token = os.getenv("TOKEN")
 catalog = os.getenv("DATABRICKS_CATALOG")
 schema = os.getenv("DATABRICKS_SCHEMA")
 
@@ -74,11 +92,16 @@ HEATMAP_QUERY = read_sql_file("./config/tagging_advisor/tag_sku_heatmap_query.sq
 TAG_VALUES_OVER_TIME_QUERY = read_sql_file("./config/tagging_advisor/tag_values_over_time.sql")
 DEFAULT_TOP_N = 100
 
+
 ### Client for interacting with all of Databricks outside of submitting SQL commands
-dbx_client = WorkspaceClient(
-        host=host,
-        token = access_token
-    )
+## If DBX_TOKEN is available then use it if not, assume OAuth
+if access_token is not None:
+    dbx_client = WorkspaceClient()
+    system_query_manager = QueryManager(host=host, http_path=http_path, auth_type="token", access_token= access_token, catalog= catalog, schema = schema)
+
+else: 
+    dbx_client = WorkspaceClient() ## Assume OAuth
+    system_query_manager = QueryManager(host=host, http_path=http_path, auth_type="oauth", catalog= catalog, schema = schema)
 
 ###########  Initialize the Dash app with a Bootstrap theme ###########
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -86,7 +109,6 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_
 ##### Load Init Scripts 
 ## Create Engine on start up
 ### System query manager uses the system catalog and schema scope (for the tables it creates and manages)
-system_query_manager = QueryManager(host=host, http_path=http_path, access_token= access_token, catalog= catalog, schema = schema)
 system_engine = system_query_manager.get_engine()
 
 ### Functions to process data for these tabs
@@ -107,15 +129,15 @@ def cached_execute_query_to_df(query):
     return system_query_manager.execute_query_to_df(query)
 
 ### Cache the start up load specifically
-@cache.memoize(timeout=600)
+@cache.memoize(timeout=30)
 def cached_get_base_tag_page_filter_defaults():
     return tag_advisor_manager.get_base_tag_page_filter_defaults()
 
-@cache.memoize(timeout=600)
+@cache.memoize(timeout=30)
 def cached_get_tag_filters():
     return tag_advisor_manager.get_tag_filters()
 
-@cache.memoize(timeout=600)
+@cache.memoize(timeout=30)
 def cached_get_tag_policies_grid_data():
     return tag_advisor_manager.get_tag_policies_grid_data()
 
@@ -1349,13 +1371,14 @@ def update_sql_grid_data(n_clicks, start_date, end_date, tag_filter, product_cat
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
-
+##### Manually Saved Tags Callback
 @app.callback(
     [Output('cluster-tag-changes-store', 'data'),
      Output('cluster-tag-rowData-store', 'data'),
      Output('compute-tag-change-indicator', 'style'),
      Output('loading-save-compute-tags', 'children'),
      Output('loading-clear-compute-tags', 'children'),
+     Output('loading-sync-compute-tags', 'children'),
      Output('save-tags-trigger', 'children'), ## For when we just need to reload data locally
      Output('reload-tags-trigger', 'children')],
     ## Also need to update all filters and visuals? Or let the button to do? with the "Refresh Button"
@@ -1363,13 +1386,14 @@ def update_sql_grid_data(n_clicks, start_date, end_date, tag_filter, product_cat
      Input('tag-compute-tags-clear-btn', 'n_clicks'),
      Input('add-compute-tag-row-btn', 'n_clicks'),
      Input('remove-compute-tags-row-btn', 'n_clicks'),
+     Input('tag-compute-tags-sync-btn', 'n_clicks'),
      Input('tag-compute-ag-grid', 'cellValueChanged')], 
     [State('cluster-tag-changes-store', 'data'),
      State('tag-compute-ag-grid', 'rowData'),
      State('cluster-tag-rowData-store', 'data'),
      State('tag-compute-ag-grid', 'selectedRows')]
 )
-def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remove_row_clicks, cell_change,
+def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remove_row_clicks, sync_tags_clicks, cell_change,
                            changes, row_data, original_data, selected_rows):
 
     
@@ -1378,7 +1402,6 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
     triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
 
 
-    #### TO DO: Need to Handle Deletes
     ##### CREATE - Add New row in GRID
     if triggered_id == 'add-compute-tag-row-btn' and add_row_clicks > 0:
 
@@ -1393,7 +1416,7 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
         }
         row_data.append(new_row)
 
-        return dash.no_update, row_data, dash.no_update, dash.no_update, dash.no_update, 'Added Tag Row To Grid', dash.no_update
+        return dash.no_update, row_data, dash.no_update, dash.no_update, dash.no_update, dash.no_update, 'Added Tag Row To Grid', dash.no_update
 
 
     ##### DELETES 
@@ -1405,21 +1428,8 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
         ids_to_remove = [row['tag_id'] for row in selected_rows if row['tag_id'] is not None]
         updated_row_data = [row for row in row_data if row['tag_id'] not in ids_to_remove]
         
-        if ids_to_remove:
-            connection = system_query_manager.get_engine().connect()
-            try:
-                delete_query = text("""
-                    DELETE FROM app_compute_tags
-                    WHERE tag_id IN :ids
-                """).bindparams(bindparam('ids', expanding=True))
-                connection.execute(delete_query, parameters= {'ids':ids_to_remove})
-                connection.commit()
-
-            except Exception as e:
-                print(f"Error during deletion: {e}")
-                raise e
-            finally:
-                connection.close()
+        ## Delete the Ids from the system
+        tag_advisor_manager.delete_tag_ids(ids_to_remove=ids_to_remove)
 
         if changes is not None:
             updated_changes = [change for change in changes if change['tag_id'] not in ids_to_remove]
@@ -1427,7 +1437,7 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
             updated_changes = []
 
 
-        return updated_changes, updated_row_data, dash.no_update, dash.no_update, dash.no_update, 'Deleted Row Locally and in DB', dash.no_update
+        return updated_changes, updated_row_data, dash.no_update, dash.no_update, dash.no_update, dash.no_update, 'Deleted Row Locally and in DB', dash.no_update
 
 
 
@@ -1443,15 +1453,15 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
         changes.append(change_data)
         row_data = mark_changed_rows(row_data, changes, row_id='rowIndex')
 
-        return changes, row_data, {'display': 'block', 'color': 'yellow', 'font-weight': 'bold'}, dash.no_update, dash.no_update, 'Edited Row Locally', dash.no_update
+        return changes, row_data, {'display': 'block', 'color': 'yellow', 'font-weight': 'bold'}, dash.no_update, dash.no_update, dash.note_update, 'Edited Row Locally', dash.no_update
 
 
     ##### Handle Clear Button Press
-    elif triggered_id == 'ag-compute-tags-clear-btn' and clear_clicks:
+    elif triggered_id == 'tag-compute-tags-clear-btn' and clear_clicks:
         
-        clear_loading_content = html.Button('Clear Tag Changes', id='tag-compute-tags-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+        clear_loading_content = html.Button('Clear Changes', id='tag-compute-tags-clear-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
 
-        return [], original_data, {'display': 'none'}, dash.no_update, clear_loading_content, dash.no_update, 'Cleared All Changes and Reload'
+        return [], original_data, {'display': 'none'}, dash.no_update, clear_loading_content, dash.no_update, dash.no_update, 'Cleared All Changes and Reload'
     
 
     ##### Handle Saving New Tag Key Values 
@@ -1466,62 +1476,40 @@ def update_tag_compute_grid_data(save_clicks, clear_clicks, add_row_clicks, remo
         if changes:
             grouped_changes = group_changes_by_row(changes) ## from data_functions.utils import *
 
+        save_loading_content = html.Button('Save Changes', id='tag-compute-tags-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
+
 
         connection = system_query_manager.get_engine().connect()
 
-        save_loading_content = html.Button('Save Tag Changes', id='tag-compute-tags-save-btn', n_clicks=0, style={'margin-bottom': '10px'}, className = 'prettier-button')
-
         ### MERGE KEY IS job_id, tag_key_name
         ## We Basically dont need a separate UPDATE / INSERT because the cluster exists already. We simply MERGE UPSERT for each cluster/ ke/value
+
+        ## TO DO: move to tag manager class
         if changes:
-            try:
-                # Process grouped changes for both updates and inserts
-                for change in grouped_changes:
-                    #print("Combined change data:", change)  # Debug statement
-                    record_id = change.get('tag_id')
-
-                    if record_id:
-                        # Update existing record
-                        update_query = text("""
-                            UPDATE app_compute_tags t
-                            SET 
-                            tag_policy_name = :tag_policy_name,
-                            tag_key = :tag_key,
-                            tag_value = :tag_value
-                            WHERE tag_id = :tag_id
-                                    AND compute_asset_id = :compute_asset_id
-                                    AND compute_asset_type = :compute_asset_type
-                               
-                        """)
-
-                        connection.execute(update_query, parameters={
-                            'tag_id': record_id,
-                            'compute_asset_id': change.get('compute_asset_id', None),
-                            'compute_asset_type': change.get('compute_asset_type', None),
-                            'tag_policy_name': change.get('tag_policy_name', None),
-                            'tag_key': change.get('tag_key', None),
-                            'tag_value': change.get('tag_value', None)
-                        })
-
-                        connection.commit()
-
-            except Exception as e:
-                print(f"Error during save with tag changes: {changes}")  # Debug error
-                raise e
-            finally:
-                connection.close()
-
+            tag_advisor_manager.save_manual_tags_edits(grouped_changes=grouped_changes)
         ## No change, no Op
         else:
             pass
 
         updated_data_after_save = tag_advisor_manager.get_compute_tagged_grid_data().to_dict('records')
             
-        return [], updated_data_after_save, {'display': 'none'}, save_loading_content, dash.no_update, dash.no_update, 'tag_save_triggered'
+        return [], updated_data_after_save, {'display': 'none'}, save_loading_content, dash.no_update, dash.no_update, dash.no_update, 'tag_save_triggered'
         
 
+    # Handle saving changes
+    if triggered_id == 'tag-compute-tags-sync-btn' and sync_tags_clicks and len(selected_rows) > 0:
+
+        ## Performs the tag sync by compute asset type
+        tag_advisor_manager.sync_manual_tags_to_assets(dbx_client=dbx_client, selected_rows=selected_rows)
+        
+        ## Get final state from table
+        updated_data_after_sync = tag_advisor_manager.get_compute_tagged_grid_data().to_dict('records')  
+
+        return [], updated_data_after_sync, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, 'tag_save_triggered'
+
+
     # Default return to avoid callback errors
-    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 
@@ -1579,7 +1567,7 @@ def submit_chat(chat_submit_n_clicks, clear_context_n_clicks, input_value, histo
         return {'messages': []}, "Chat history cleared.", "", {'data': {'alert': {}}}
 
     if button_id == 'chat-submit-btn' and input_value:
-        new_history = history['messages'][-4:]  # keep only the last 2 messages for rolling basis
+        new_history = history['messages'][-4:]   # keep only the last 2 messages for rolling basis
         new_input = """**ME**:   """+ input_value
         new_history.append(new_input)
         response_message = ""
