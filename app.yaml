@@ -5,12 +5,12 @@ command: [
 
 env:
   - name: "DATABRICKS_HOST"
-    value: 
+    value: "<host>"
   - name: "DATABRICKS_HTTP_PATH"
-    value: 
+    value: "/sql/1.0/warehouses/<warehouse_id>"
   - name: "DATABRICKS_CATALOG"
     value: "main"
   - name: "DATABRICKS_SCHEMA"
     value: "dash_observability_advisor"
   - name: "TOKEN"
-    value: 
+    value: "<token>"

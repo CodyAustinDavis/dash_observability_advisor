@@ -161,14 +161,6 @@ SELECT * FROM clean_usage
 )
 CLUSTER BY (usage_start_time);
 
-OPTIMIZE clean_usage_table;
-ANALYZE TABLE clean_usage_table COMPUTE DELTA STATISTICS;
-ANALYZE TABLE clean_usage_table COMPUTE STATISTICS FOR COLUMNS usage_start_time, usage_end_time, usage_quantity, billing_origin_product, clean_job_or_pipeline_id, clean_warehouse_id, clean_cluster_id; 
-
-
-
-
-
 
 DROP FUNCTION IF EXISTS main.dash_observability_advisor.generate_alert_info_from_prompt;
 
