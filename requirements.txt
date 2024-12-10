@@ -10,3 +10,4 @@ python-dotenv
 pandasql
 flask_caching
 pyyaml
+databricks-sdk
